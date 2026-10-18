@@ -1,0 +1,10 @@
+{
+  "description": "This cryptocurrency investment app empowers users to manage and grow their digital assets with an intuitive interface and advanced analytics.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
