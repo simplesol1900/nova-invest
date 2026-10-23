@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   allocateSandboxInvestment, createAccount, createSandboxRequest,
-  getAdminOverview, getProfile, getSandboxAccount, reviewSandboxRequest,
-  settleSandboxInvestment, updateSandboxKyc, validateReferral,
+  claimProfitCode, getAdminOverview, getProfile, getProfitCodeHistory, getSandboxAccount, reviewSandboxRequest,
+  settleSandboxInvestment, submitKyc, updateSandboxKyc, validateReferral,
   type LedgerEntry, type SandboxInvestment, type SandboxRequest, type UserProfile,
 } from "./lib/api";
 import { supabase } from "./lib/supabase";
@@ -899,7 +899,7 @@ function TransactionsScreen({ goBack }: { goBack:()=>void }) {
         <p className="text-xs font-bold text-[#888] uppercase tracking-wider mb-2">Pending requests</p>
         <Card className="overflow-hidden mb-5">{requests.length===0?<p className="p-4 text-xs text-[#aaa]">No requests yet.</p>:requests.map(r=><div key={r.id} className="p-4 border-b border-[#f0f0f0] last:border-0 flex items-center gap-3"><div className="flex-1"><p className="text-sm font-semibold capitalize">{r.type}</p><p className="text-[10px] text-[#aaa]">{new Date(r.createdAt).toLocaleString()}</p></div><div className="text-right"><p className="text-sm font-mono font-bold">{r.amount.toFixed(2)}</p><p className={`text-[10px] font-bold ${r.status==="approved"?"text-[#00c896]":r.status==="rejected"?"text-red-500":"text-amber-600"}`}>{r.status}</p></div></div>)}</Card>
         <p className="text-xs font-bold text-[#888] uppercase tracking-wider mb-2">Posted ledger</p>
-        <Card className="overflow-hidden">{ledger.length===0?<p className="p-4 text-xs text-[#aaa]">No ledger entries yet.</p>:ledger.map(e=><div key={e.id} className="p-4 border-b border-[#f0f0f0] last:border-0"><div className="flex justify-between gap-3"><div><p className="text-sm font-semibold capitalize">{e.type.replaceAll("_"," ")}</p><p className="text-[10px] text-[#aaa] mt-0.5">{e.note}</p></div><p className={`text-sm font-mono font-bold ${e.amount>=0?"text-[#00c896]":"text-red-500"}`}>{e.amount>=0?"+":""}{e.amount.toFixed(2)}</p></div><p className="text-[10px] text-[#bbb] mt-2">Available {e.availableAfter.toFixed(2)} · Invested {e.investedAfter.toFixed(2)}</p></div>)}</Card>
+        <Card className="overflow-hidden">{ledger.length===0?<p className="p-4 text-xs text-[#aaa]">No ledger entries yet.</p>:ledger.map(e=><div key={e.id} className="p-4 border-b border-[#f0f0f0] last:border-0"><div className="flex justify-between gap-3"><div><p className="text-sm font-semibold capitalize">{e.type.replace(/_/g," ")}</p><p className="text-[10px] text-[#aaa] mt-0.5">{e.note}</p></div><p className={`text-sm font-mono font-bold ${e.amount>=0?"text-[#00c896]":"text-red-500"}`}>{e.amount>=0?"+":""}{e.amount.toFixed(2)}</p></div><p className="text-[10px] text-[#bbb] mt-2">Available {e.availableAfter.toFixed(2)} · Invested {e.investedAfter.toFixed(2)}</p></div>)}</Card>
       </div>
     </div>
   );
@@ -1305,20 +1305,24 @@ function PhoneInput({ label="Mobile Number", required=true, onChange }: { label?
 }
 
 // ─── File Upload Zone ─────────────────────────────────────────────────────────
-function UploadZone({ label, accept="image/*,application/pdf" }: { label:string; accept?:string }) {
+type KycFile = { label:string; name:string; dataUrl:string };
+
+function UploadZone({ label, accept="image/*,application/pdf", onFile }: { label:string; accept?:string; onFile?:(file:KycFile)=>void }) {
   const [preview,setPreview]=useState<string|null>(null);
   const [fileName,setFileName]=useState<string|null>(null);
   const ref=useRef<HTMLInputElement>(null);
   function handle(e:React.ChangeEvent<HTMLInputElement>){
     const f=e.target.files?.[0];
     if(!f) return;
+    if(f.size>5*1024*1024){e.target.value="";return;}
     setFileName(f.name);
-    if(f.type.startsWith("image/")){
-      const url=URL.createObjectURL(f);
-      setPreview(url);
-    } else {
-      setPreview(null);
-    }
+    const reader=new FileReader();
+    reader.onload=()=>{
+      const dataUrl=String(reader.result||"");
+      setPreview(f.type.startsWith("image/")?dataUrl:null);
+      onFile?.({label:label||"Selfie",name:f.name,dataUrl});
+    };
+    reader.readAsDataURL(f);
   }
   return (
     <div>
@@ -1426,7 +1430,7 @@ function CameraModule({ onCapture }: { onCapture:(img:string)=>void }) {
         <p className="text-xs text-[#aaa]">Your front-facing camera will open</p>
       </div>
       <p className="text-[10px] text-[#bbb] text-center">Or upload a photo from your gallery</p>
-      <UploadZone label="" accept="image/*"/>
+      <UploadZone label="" accept="image/*" onFile={file=>onCapture(file.dataUrl)}/>
     </div>
   );
 }
@@ -1443,6 +1447,20 @@ function KYCScreen({ navigate, goBack }: { navigate:(s:Screen)=>void; goBack:()=
   const [phone,setPhone]=useState("");
   const [languages,setLanguages]=useState("");
   const [relationship,setRelationship]=useState("Friend");
+  const [gender,setGender]=useState("");
+  const [address,setAddress]=useState("");
+  const [city,setCity]=useState("");
+  const [region,setRegion]=useState("");
+  const [postalCode,setPostalCode]=useState("");
+  const [country,setCountry]=useState("");
+  const [documentNumber,setDocumentNumber]=useState("");
+  const [issueDate,setIssueDate]=useState("");
+  const [expiryDate,setExpiryDate]=useState("");
+  const [issuingCountry,setIssuingCountry]=useState("");
+  const [documentFront,setDocumentFront]=useState<KycFile|null>(null);
+  const [documentBack,setDocumentBack]=useState<KycFile|null>(null);
+  const [submitting,setSubmitting]=useState(false);
+  const [submissionError,setSubmissionError]=useState("");
   const ACCOUNT_ID="NI-847290";
   const REFERRER_CODE="NI-A8M2K9";
 
@@ -1452,6 +1470,21 @@ function KYCScreen({ navigate, goBack }: { navigate:(s:Screen)=>void; goBack:()=
     :["National ID","Passport","Driver's Licence","Voter's Card"];
 
   function completeStep(i:number){ setDone(d=>{const n=[...d];n[i]=true;return n;}); setStep(0); }
+  async function submitKycApplication(){
+    if(!selfieImg||!documentFront)return;
+    setSubmitting(true);setSubmissionError("");
+    try{
+      await submitKyc({
+        fullName,dateOfBirth:dob,nationality,phone,gender,
+        address:[address,city,region,postalCode,country].filter(Boolean).join(", "),
+        documentType:docType,documentNumber,issueDate,expiryDate,issuingCountry,
+        documents:[documentFront,documentBack].filter((file):file is KycFile=>Boolean(file)),
+        selfie:{name:"selfie.jpg",dataUrl:selfieImg},
+      });
+      setStep(4);
+    }catch(error){setSubmissionError(error instanceof Error?error.message:"KYC submission failed.");}
+    finally{setSubmitting(false);}
+  }
 
   function calcAge(d:string):string {
     if(!d) return "—";
@@ -1505,7 +1538,8 @@ function KYCScreen({ navigate, goBack }: { navigate:(s:Screen)=>void; goBack:()=
             </button>
           );
         })}
-        <GreenBtn label={done.every(Boolean)?"Submit KYC →":"Complete All Steps to Continue"} disabled={!done.every(Boolean)} onClick={()=>setStep(4)}/>
+        {submissionError&&<p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">{submissionError}</p>}
+        <GreenBtn label={submitting?"Submitting securely…":done.every(Boolean)?"Submit KYC →":"Complete All Steps to Continue"} disabled={!done.every(Boolean)||submitting||!documentFront||!selfieImg} onClick={submitKycApplication}/>
       </div>
     </div>
   );
@@ -1521,7 +1555,7 @@ function KYCScreen({ navigate, goBack }: { navigate:(s:Screen)=>void; goBack:()=
             <Field label="Date of Birth" placeholder="DD/MM/YYYY" type="date" value={dob} onChange={setDob}/>
             <div>
               <label className="text-xs text-[#666] mb-1.5 block font-medium">Gender<span className="text-red-500 ml-0.5">*</span></label>
-              <select className="w-full bg-white border border-[#e5e7eb] rounded-xl px-4 py-3 text-sm text-[#111] outline-none focus:border-[#00c896]">
+              <select value={gender} onChange={e=>setGender(e.target.value)} className="w-full bg-white border border-[#e5e7eb] rounded-xl px-4 py-3 text-sm text-[#111] outline-none focus:border-[#00c896]">
                 <option value="">Select</option><option>Male</option><option>Female</option><option>Other</option>
               </select>
             </div>
@@ -1543,14 +1577,14 @@ function KYCScreen({ navigate, goBack }: { navigate:(s:Screen)=>void; goBack:()=
         </Card>
         <Card className="p-4 flex flex-col gap-4">
           <p className="text-xs font-bold text-[#111]">Residential Address</p>
-          <Field label="Street Address" placeholder="House number, street name"/>
+          <Field label="Street Address" placeholder="House number, street name" value={address} onChange={setAddress}/>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="City / Town" placeholder="City"/>
-            <Field label="State / Province" placeholder="State"/>
+            <Field label="City / Town" placeholder="City" value={city} onChange={setCity}/>
+            <Field label="State / Province" placeholder="State" value={region} onChange={setRegion}/>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Postal Code" placeholder="ZIP / Postal code" required={false}/>
-            <CountrySelect label="Country"/>
+            <Field label="Postal Code" placeholder="ZIP / Postal code" required={false} value={postalCode} onChange={setPostalCode}/>
+            <CountrySelect label="Country" value={country} onChange={setCountry}/>
           </div>
         </Card>
         <GreenBtn label="Save & Continue →" onClick={()=>completeStep(0)}/>
@@ -1574,18 +1608,18 @@ function KYCScreen({ navigate, goBack }: { navigate:(s:Screen)=>void; goBack:()=
               ))}
             </div>
           </div>
-          <Field label="Document Number" placeholder={isIndian&&docType==="Aadhaar Card"?"12-digit Aadhaar number":"Enter document number"}/>
+          <Field label="Document Number" placeholder={isIndian&&docType==="Aadhaar Card"?"12-digit Aadhaar number":"Enter document number"} value={documentNumber} onChange={setDocumentNumber}/>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Issue Date" placeholder="DD/MM/YYYY" type="date"/>
-            <Field label="Expiry Date" placeholder="DD/MM/YYYY" type="date" required={docType==="Aadhaar Card"?false:true}/>
+            <Field label="Issue Date" placeholder="DD/MM/YYYY" type="date" value={issueDate} onChange={setIssueDate}/>
+            <Field label="Expiry Date" placeholder="DD/MM/YYYY" type="date" required={docType==="Aadhaar Card"?false:true} value={expiryDate} onChange={setExpiryDate}/>
           </div>
-          <CountrySelect label="Issuing Country"/>
+          <CountrySelect label="Issuing Country" value={issuingCountry} onChange={setIssuingCountry}/>
         </Card>
         <Card className="p-4 flex flex-col gap-4">
           <p className="text-xs font-bold text-[#111]">Upload Document Photos</p>
           <p className="text-xs text-[#888]">Clear photos with all four corners visible and text legible. Max 5 MB each.</p>
-          <UploadZone label="Front of Document"/>
-          {docType!=="Passport"&&<UploadZone label="Back of Document"/>}
+          <UploadZone label="Front of Document" onFile={setDocumentFront}/>
+          {docType!=="Passport"&&<UploadZone label="Back of Document" onFile={setDocumentBack}/>}
         </Card>
         <div className="bg-blue-50 border border-blue-100 rounded-2xl p-3 flex gap-2">
           <span className="flex-shrink-0">ℹ️</span>
@@ -1988,14 +2022,22 @@ function TxSuccessScreen({ navigate }: { navigate:(s:Screen)=>void }) {
 function ProfitCodeScreen({ goBack }: { goBack:()=>void }) {
   const [code,setCode]=useState("");
   const [status,setStatus]=useState<"idle"|"loading"|"success"|"error">("idle");
-  function submit(){
+  const [message,setMessage]=useState("");
+  const [history,setHistory]=useState<Array<{code:string;amount:number;kind:"fixed"|"percentage";value:number;claimedAt:string}>>([]);
+  useEffect(()=>{getProfitCodeHistory().then(data=>setHistory([...data.claims].sort((a,b)=>b.claimedAt.localeCompare(a.claimedAt)))).catch(()=>{});},[]);
+  async function submit(){
     if(!code.trim()||status==="loading"||status==="success") return;
-    setStatus("loading");
-    setTimeout(()=>{
-      setStatus(code.toUpperCase().startsWith("NI")?"success":"error");
-    },1600);
+    setStatus("loading");setMessage("");
+    try{
+      const result=await claimProfitCode(code);
+      setStatus("success");
+      setMessage(`${result.claim.amount.toFixed(2)} TUSDT has been added to your available balance.`);
+      setHistory(current=>[result.claim,...current]);
+    }catch(error){
+      setStatus("error");
+      setMessage(error instanceof Error?error.message:"The Profit Code could not be claimed.");
+    }
   }
-  const HISTORY=[{code:"NI-2026-SEP-01",pct:"+1.85%",date:"Sep 1, 2026"},{code:"NI-2026-AUG-02",pct:"+2.10%",date:"Aug 15, 2026"},{code:"NI-2026-AUG-01",pct:"+1.75%",date:"Aug 1, 2026"},{code:"NI-2026-JUL-02",pct:"+1.50%",date:"Jul 15, 2026"}];
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <DarkHeader left={<><BackButton onBack={goBack} light/><div className="ml-2"><h1 className="text-base font-bold text-white">Profit Code</h1><p className="text-[10px] text-[#888]">Claim your profit distribution</p></div></>}/>
@@ -2033,7 +2075,7 @@ function ProfitCodeScreen({ goBack }: { goBack:()=>void }) {
               <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
                 <svg viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5" className="w-4 h-4"><path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </div>
-              <div><p className="text-xs font-bold text-green-700">Code Accepted!</p><p className="text-xs text-green-600 mt-0.5">+1.85% profit has been added to your account balance.</p></div>
+              <div><p className="text-xs font-bold text-green-700">Code Accepted!</p><p className="text-xs text-green-600 mt-0.5">{message}</p></div>
             </div>
           )}
           {status==="error"&&(
@@ -2041,7 +2083,7 @@ function ProfitCodeScreen({ goBack }: { goBack:()=>void }) {
               <div className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
                 <svg viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="2" className="w-4 h-4"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01" strokeLinecap="round"/></svg>
               </div>
-              <p className="text-xs text-red-600">Invalid or expired code. Please check with your account manager.</p>
+              <p className="text-xs text-red-600">{message}</p>
             </div>
           )}
           <GreenBtn label={status==="loading"?"Verifying…":"Apply Profit Code"} onClick={submit} disabled={!code.trim()||status==="loading"||status==="success"}/>
@@ -2051,13 +2093,14 @@ function ProfitCodeScreen({ goBack }: { goBack:()=>void }) {
           <div className="px-4 py-3 border-b border-[#f0f0f0]">
             <p className="text-sm font-bold text-[#111]">Profit History</p>
           </div>
-          {HISTORY.map((h,i)=>(
-            <div key={h.code} className={`flex items-center gap-3 px-4 py-3 ${i<HISTORY.length-1?"border-b border-[#f5f5f5]":""}`}>
+          {history.length===0&&<p className="px-4 py-5 text-xs text-[#aaa]">No Profit Codes claimed yet.</p>}
+          {history.map((h,i)=>(
+            <div key={`${h.code}-${h.claimedAt}`} className={`flex items-center gap-3 px-4 py-3 ${i<history.length-1?"border-b border-[#f5f5f5]":""}`}>
               <div className="w-8 h-8 rounded-full bg-[#00c896]/10 flex items-center justify-center flex-shrink-0">
                 <svg viewBox="0 0 24 24" fill="none" stroke="#00c896" strokeWidth="2.5" className="w-3.5 h-3.5"><path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </div>
-              <div className="flex-1"><p className="text-xs font-mono text-[#555]">{h.code}</p><p className="text-[10px] text-[#bbb] mt-0.5">{h.date}</p></div>
-              <span className="text-sm font-bold font-mono text-[#00c896]">{h.pct}</span>
+              <div className="flex-1"><p className="text-xs font-mono text-[#555]">{h.code}</p><p className="text-[10px] text-[#bbb] mt-0.5">{new Date(h.claimedAt).toLocaleString()}</p></div>
+              <span className="text-sm font-bold font-mono text-[#00c896]">+{h.amount.toFixed(2)}</span>
             </div>
           ))}
         </Card>
