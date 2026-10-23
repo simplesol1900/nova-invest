@@ -8,26 +8,12 @@ export type UserProfile = {
   id: string;
   fullName: string;
   phone: string;
-  email?: string;
   referralCode: string;
   referredBy: string;
   createdAt: string;
   kycStatus: "not_submitted" | "pending" | "approved" | "rejected";
-  accountStatus: "pending" | "active" | "suspended" | "revoked" | "deleted";
   role: "user" | "admin";
-  permissions?: Array<AdminPermission | "*">;
-  account?: SandboxAccount;
 };
-
-export type AdminPermission =
-  | "users"
-  | "funding"
-  | "kyc"
-  | "balances"
-  | "investments"
-  | "profit_codes"
-  | "admins"
-  | "audit";
 
 export type SandboxAccount = {
   available: number;
@@ -66,50 +52,6 @@ export type SandboxInvestment = {
   status: "open" | "settled";
   createdAt: string;
   profit?: number;
-};
-
-export type ProfitCode = {
-  code: string;
-  kind: "fixed" | "percentage";
-  value: number;
-  active: boolean;
-  expiresAt?: string | null;
-  createdAt: string;
-};
-
-export type AdminAudit = {
-  id: string;
-  adminId: string;
-  adminName: string;
-  action: string;
-  targetId?: string;
-  detail: string;
-  createdAt: string;
-};
-
-export type AdminNote = {
-  id: string;
-  userId: string;
-  text: string;
-  adminId: string;
-  adminName: string;
-  createdAt: string;
-};
-
-export type KycSubmission = {
-  id: string;
-  userId: string;
-  status: "pending" | "approved" | "rejected";
-  submittedAt: string;
-  reviewedAt?: string | null;
-  reviewNote?: string;
-  details: Record<string, string>;
-  documents: Array<{
-    label: string;
-    name: string;
-    type: string;
-    url?: string;
-  }>;
 };
 
 async function request<T>(
@@ -213,59 +155,11 @@ export async function createSandboxRequest(input: {
   }, "user");
 }
 
-export async function submitKyc(input: {
-  fullName: string;
-  dateOfBirth: string;
-  nationality: string;
-  phone: string;
-  gender: string;
-  address: string;
-  documentType: string;
-  documentNumber: string;
-  issueDate: string;
-  expiryDate: string;
-  issuingCountry: string;
-  documents: Array<{ label: string; name: string; dataUrl: string }>;
-  selfie: { name: string; dataUrl: string };
-}) {
-  return request<{ submission: KycSubmission }>("/kyc", {
-    method: "POST",
-    body: JSON.stringify(input),
-  }, "user");
-}
-
-export async function claimProfitCode(code: string) {
-  return request<{
-    claim: { code: string; amount: number; value: number; kind: "fixed" | "percentage"; claimedAt: string };
-    account: SandboxAccount;
-  }>("/profit-codes/claim", {
-    method: "POST",
-    body: JSON.stringify({ code }),
-  }, "user");
-}
-
-export async function getProfitCodeHistory() {
-  return request<{
-    claims: Array<{
-      code: string;
-      userId: string;
-      amount: number;
-      value: number;
-      kind: "fixed" | "percentage";
-      claimedAt: string;
-    }>;
-  }>("/profit-codes/history", {}, "user");
-}
-
 export async function getAdminOverview() {
   return request<{
     profiles: UserProfile[];
     requests: SandboxRequest[];
     investments: SandboxInvestment[];
-    profitCodes: ProfitCode[];
-    audits: AdminAudit[];
-    notes: AdminNote[];
-    kycs: KycSubmission[];
   }>("/admin/overview", {}, "admin");
 }
 
@@ -280,97 +174,6 @@ export async function updateSandboxKyc(id: string, status: "approved" | "rejecte
   return request<{ profile: UserProfile }>(`/admin/users/${id}/kyc`, {
     method: "POST",
     body: JSON.stringify({ status }),
-  }, "admin");
-}
-
-export async function updateUserStatus(
-  id: string,
-  status: "pending" | "active" | "suspended" | "revoked",
-) {
-  return request<{ profile: UserProfile }>(`/admin/users/${id}/status`, {
-    method: "POST",
-    body: JSON.stringify({ status }),
-  }, "admin");
-}
-
-export async function deleteUser(id: string) {
-  return request<{ profile: UserProfile }>(`/admin/users/${id}`, {
-    method: "DELETE",
-  }, "admin");
-}
-
-export async function resetUserPassword(id: string, password: string) {
-  return request<{ success: true }>(`/admin/users/${id}/password`, {
-    method: "POST",
-    body: JSON.stringify({ password }),
-  }, "admin");
-}
-
-export async function adjustUserBalance(
-  id: string,
-  operation: "credit" | "debit" | "set",
-  amount: number,
-  note: string,
-) {
-  return request<{ account: SandboxAccount }>(`/admin/users/${id}/balance`, {
-    method: "POST",
-    body: JSON.stringify({ operation, amount, note }),
-  }, "admin");
-}
-
-export async function addAdminNote(id: string, text: string) {
-  return request<{ note: AdminNote }>(`/admin/users/${id}/notes`, {
-    method: "POST",
-    body: JSON.stringify({ text }),
-  }, "admin");
-}
-
-export async function createProfitCode(input: {
-  code: string;
-  kind: "fixed" | "percentage";
-  value: number;
-  expiresAt?: string;
-}) {
-  return request<{ profitCode: ProfitCode }>("/admin/profit-codes", {
-    method: "POST",
-    body: JSON.stringify(input),
-  }, "admin");
-}
-
-export async function setProfitCodeStatus(code: string, active: boolean) {
-  return request<{ profitCode: ProfitCode }>(
-    `/admin/profit-codes/${encodeURIComponent(code)}/status`,
-    {
-      method: "POST",
-      body: JSON.stringify({ active }),
-    },
-    "admin",
-  );
-}
-
-export async function createAdministrator(input: {
-  fullName: string;
-  email: string;
-  password: string;
-  permissions: AdminPermission[];
-}) {
-  return request<{ profile: UserProfile }>("/admin/admins", {
-    method: "POST",
-    body: JSON.stringify(input),
-  }, "admin");
-}
-
-export async function updateAdministrator(
-  id: string,
-  input: {
-    status?: "active" | "revoked";
-    password?: string;
-    permissions?: AdminPermission[];
-  },
-) {
-  return request<{ profile: UserProfile }>(`/admin/admins/${id}`, {
-    method: "POST",
-    body: JSON.stringify(input),
   }, "admin");
 }
 
