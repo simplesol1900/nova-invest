@@ -1,7 +1,8 @@
 {
-  "description": "This cryptocurrency investment app empowers users to manage and grow their digital assets with an intuitive interface and advanced analytics.",
+  "title": "NOVA INVEST",
+  "description": "NOVA INVEST helps members manage investments across global stock and metal markets.",
   "robots": {
-    "index": false
+    "index": true
   },
   "accessibility": {
     "addBypassLinks": false,
