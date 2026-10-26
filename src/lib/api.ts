@@ -127,9 +127,10 @@ async function request<T>(
   try {
     const headers: Record<string, string> = {
       apikey: publicAnonKey,
-      Authorization: `Bearer ${adminToken ?? session?.access_token ?? publicAnonKey}`,
+      Authorization: `Bearer ${session?.access_token ?? publicAnonKey}`,
       ...(init.headers as Record<string, string> | undefined),
     };
+    if (adminToken) headers["X-Admin-Token"] = adminToken;
     if (init.body) headers["Content-Type"] = "application/json";
     response = await fetch(`${baseUrl}${path}`, {
       ...init,
