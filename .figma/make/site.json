@@ -1,6 +1,9 @@
 {
   "title": "NOVA INVEST",
   "description": "NOVA INVEST helps members manage investments across global stock and metal markets.",
+  "icons": {
+    "icon": "/favicon.svg"
+  },
   "robots": {
     "index": true
   },

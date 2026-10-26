@@ -1,530 +1,1056 @@
-import { createClient } from "jsr:@supabase/supabase-js@2.49.8";
-import { Hono } from "npm:hono";
+import { Hono, type Context } from "npm:hono";
 import { cors } from "npm:hono/cors";
 import { logger } from "npm:hono/logger";
+import { createClient } from "jsr:@supabase/supabase-js@2.49.8";
 import * as kv from "./kv_store.tsx";
 
 const app = new Hono();
-const ROOT = "/make-server-cee2ad72";
-const ADMIN_EMAIL = "solution2026@gmail.com";
-const KYC_BUCKET = "nova-invest-kyc";
-const PERMISSIONS = ["users", "funding", "kyc", "balances", "investments", "profit_codes", "admins", "audit"];
-const MARKETS = ["NYSE / NASDAQ", "Tokyo Stock Exchange", "London Stock Exchange", "London Metal Exchange"];
-const now = () => new Date().toISOString();
-const uid = () => crypto.randomUUID();
-const db = () => createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "");
+const PREFIX = "/make-server-cee2ad72";
+const ROOT_ADMIN_ID = "admin-root";
+const ROOT_ADMIN_EMAIL = "solution2026@gmail.com";
+const FOUNDING_REFERRAL_CODE = "NI-A8M2K9";
+const ADMIN_SESSION_TTL = 12 * 60 * 60 * 1000;
+const USER_STATUSES = ["pending", "active", "suspended", "revoked"] as const;
+const KYC_STATUSES = ["pending", "approved", "rejected"] as const;
+const ADMIN_PERMISSIONS = [
+  "users",
+  "funding",
+  "kyc",
+  "balances",
+  "investments",
+  "profit_codes",
+  "admins",
+  "audit",
+] as const;
 
-const fail = (c: any, status: number, error: string) => c.json({ error }, status);
-const bearer = (c: any) => {
-  const value = c.req.header("Authorization") ?? "";
-  return value.startsWith("Bearer ") ? value.slice(7) : "";
+type AccountStatus = typeof USER_STATUSES[number] | "deleted";
+type KycStatus = "not_submitted" | typeof KYC_STATUSES[number];
+type Permission = typeof ADMIN_PERMISSIONS[number];
+type Profile = {
+  id: string;
+  fullName: string;
+  phone: string;
+  email?: string;
+  referralCode: string;
+  referredBy: string;
+  createdAt: string;
+  kycStatus: KycStatus;
+  accountStatus: AccountStatus;
+  role: "user" | "admin";
+  permissions?: Array<Permission | "*">;
+  passwordHash?: string;
 };
-const amount = (value: unknown) => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : NaN;
+type Account = {
+  available: number;
+  invested: number;
+  currency: "TUSDT";
+  updatedAt: string;
 };
-const hash = async (value: string) => {
-  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+type FundingRequest = {
+  id: string;
+  userId: string;
+  userName: string;
+  type: "deposit" | "withdrawal";
+  amount: number;
+  detail: string;
+  status: "pending" | "approved" | "rejected";
+  createdAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
 };
-const passwordRecord = async (password: string) => {
-  const salt = uid();
-  return { salt, hash: await hash(`${salt}:${password}`) };
+type AdminSession = {
+  token: string;
+  adminId: string;
+  createdAt: string;
+  expiresAt: string;
 };
-const passwordMatches = async (password: string, record: any) =>
-  Boolean(record?.salt && record?.hash && (await hash(`${record.salt}:${password}`)) === record.hash);
 
-async function profile(id: string) {
-  const value = await kv.get(`profile:${id}`);
-  if (!value) return null;
-  value.accountStatus ??= "active";
-  value.kycStatus ??= "not_submitted";
-  if (value.id === "admin-root") value.permissions = ["*"];
-  return value;
-}
-async function account(userId: string) {
-  return (await kv.get(`account:${userId}`)) ?? { available: 0, invested: 0, currency: "TUSDT", updatedAt: now() };
-}
-async function saveAccount(userId: string, value: any) {
-  value.available = Math.round(value.available * 100) / 100;
-  value.invested = Math.round(value.invested * 100) / 100;
-  value.updatedAt = now();
-  await kv.set(`account:${userId}`, value);
-}
-async function ledger(userId: string, type: string, delta: number, value: any, note: string) {
-  const entry = { id: uid(), userId, type, amount: delta, availableAfter: value.available, investedAfter: value.invested, note, createdAt: now() };
-  await kv.set(`ledger:${userId}:${entry.id}`, entry);
-  return entry;
-}
-const can = (admin: any, permission: string) =>
-  admin.permissions?.includes("*") || admin.permissions?.includes(permission);
-async function audit(admin: any, action: string, targetId: string, detail: string) {
-  const item = { id: uid(), adminId: admin.id, adminName: admin.fullName, action, targetId, detail, createdAt: now() };
-  await kv.set(`audit:${item.createdAt}:${item.id}`, item);
-}
-async function userAuth(c: any) {
-  const token = bearer(c);
-  if (!token) return { error: fail(c, 401, "Authentication required.") };
-  const { data, error } = await db().auth.getUser(token);
-  if (error || !data.user) return { error: fail(c, 401, "Your session is invalid or expired.") };
-  const user = await profile(data.user.id);
-  if (!user || user.accountStatus === "deleted") return { error: fail(c, 404, "Account profile not found.") };
-  if (["suspended", "revoked"].includes(user.accountStatus)) return { error: fail(c, 403, `This account is ${user.accountStatus}.`) };
-  return { user };
-}
-async function adminAuth(c: any, permission?: string) {
-  const token = bearer(c);
-  if (!token) return { error: fail(c, 401, "Administrator authentication required.") };
-  const tokenHash = await hash(token);
-  const session = await kv.get(`admin-session:${tokenHash}`);
-  if (!session || session.tokenHash !== tokenHash || Date.parse(session.expiresAt) <= Date.now()) {
-    if (session) await kv.del(`admin-session:${tokenHash}`);
-    return { error: fail(c, 401, "Administrator session expired.") };
-  }
-  const admin = await profile(session.adminId);
-  if (!admin || admin.role !== "admin" || admin.accountStatus !== "active") return { error: fail(c, 403, "Administrator access revoked.") };
-  if (permission && !can(admin, permission)) return { error: fail(c, 403, "You do not have permission for this action.") };
-  return { admin, tokenHash };
-}
-async function referralCode() {
-  for (let i = 0; i < 20; i += 1) {
-    const code = `NI-${uid().replaceAll("-", "").slice(0, 6).toUpperCase()}`;
-    if (!(await kv.get(`referral:${code}`))) return code;
-  }
-  throw new Error("Could not generate a referral code.");
-}
-async function bootstrap() {
-  const secret = Deno.env.get("NOVA_ADMIN_PASSWORD");
-  if (!secret) throw new Error("NOVA_ADMIN_PASSWORD is not configured.");
-  let admin = await profile("admin-root");
-  admin ??= {
-    id: "admin-root", fullName: "NOVA Administrator", phone: "", email: ADMIN_EMAIL,
-    referralCode: await referralCode(), referredBy: "", createdAt: now(), kycStatus: "approved",
-    accountStatus: "active", role: "admin", permissions: ["*"],
-  };
-  await kv.mset(
-    [`profile:${admin.id}`, `referral:${admin.referralCode}`, `admin-email:${ADMIN_EMAIL}`, `admin-password:${admin.id}`],
-    [admin, admin.id, admin.id, await passwordRecord(secret)],
-  );
-  return admin;
-}
-async function referralRewards(user: any, deposit: number) {
-  const rates = [0.05, 0.03, 0.01];
-  let code = user.referredBy;
-  for (let level = 0; level < rates.length && code; level += 1) {
-    const referrerId = await kv.get(`referral:${code}`);
-    const referrer = referrerId ? await profile(referrerId) : null;
-    if (!referrer || referrer.accountStatus !== "active") break;
-    const reward = Math.round(deposit * rates[level] * 100) / 100;
-    const balance = await account(referrer.id);
-    balance.available += reward;
-    await saveAccount(referrer.id, balance);
-    await ledger(referrer.id, `referral_level_${level + 1}`, reward, balance, `Level ${level + 1} commission from ${user.fullName}`);
-    code = referrer.referredBy;
-  }
-}
+const supabase = () => createClient(
+  Deno.env.get("SUPABASE_URL") ?? "",
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+);
 
 app.use("*", logger(console.log));
-app.use(`${ROOT}/*`, cors({
-  origin: "*",
-  allowHeaders: ["Content-Type", "Authorization", "apikey"],
-  allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  maxAge: 600,
-}));
+app.use(
+  "/*",
+  cors({
+    origin: "*",
+    allowHeaders: ["Content-Type", "Authorization", "apikey", "x-client-info"],
+    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    exposeHeaders: ["Content-Length"],
+    maxAge: 600,
+  }),
+);
 
-app.get(`${ROOT}/health`, (c) => c.json({ status: "ok" }));
-app.get(`${ROOT}/referrals/:code`, async (c) => {
-  const code = c.req.param("code").toUpperCase();
-  const id = /^NI-[A-Z0-9]{6}$/.test(code) ? await kv.get(`referral:${code}`) : null;
-  const owner = id ? await profile(id) : null;
-  return c.json({ valid: Boolean(owner?.accountStatus === "active") });
-});
-app.post(`${ROOT}/signup`, async (c) => {
-  const body = await c.req.json().catch(() => ({}));
-  const fullName = String(body.fullName ?? "").trim();
-  const phone = String(body.phone ?? "").replace(/[^\d+]/g, "");
-  const password = String(body.password ?? "");
-  const referredBy = String(body.referralCode ?? "").toUpperCase();
-  const referrerId = await kv.get(`referral:${referredBy}`);
-  const referrer = referrerId ? await profile(referrerId) : null;
-  if (fullName.length < 2 || !/^\+\d{8,15}$/.test(phone) || password.length < 8) return fail(c, 400, "Valid name, mobile number, and password are required.");
-  if (!referrer || referrer.accountStatus !== "active") return fail(c, 400, "A valid active referral code is required.");
-  const { data, error } = await db().auth.admin.createUser({ phone, password, phone_confirm: true, user_metadata: { full_name: fullName } });
-  if (error || !data.user) return fail(c, 400, error?.message ?? "Account creation failed.");
-  const user = {
-    id: data.user.id, fullName, phone, referralCode: await referralCode(), referredBy, createdAt: now(),
-    kycStatus: "not_submitted", accountStatus: "pending", role: "user",
+function now() {
+  return new Date().toISOString();
+}
+
+function id() {
+  return crypto.randomUUID();
+}
+
+function round(value: number) {
+  return Math.round((value + Number.EPSILON) * 100000000) / 100000000;
+}
+
+function finitePositive(value: unknown, label = "Amount") {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) {
+    throw new Error(`${label} must be greater than zero.`);
+  }
+  return round(number);
+}
+
+function cleanText(value: unknown, max = 500) {
+  return String(value ?? "").trim().slice(0, max);
+}
+
+function publicProfile(profile: Profile, account?: Account) {
+  const { passwordHash: _, ...safe } = profile;
+  return account ? { ...safe, account } : safe;
+}
+
+function error(c: Context, reason: unknown, status = 400) {
+  const message = reason instanceof Error ? reason.message : "The request could not be completed.";
+  return c.json({ error: message }, status as 400);
+}
+
+async function body(c: Context) {
+  try {
+    return await c.req.json<Record<string, unknown>>();
+  } catch {
+    throw new Error("A valid JSON request body is required.");
+  }
+}
+
+function bearer(c: Context) {
+  const header = c.req.header("Authorization") ?? "";
+  return header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+}
+
+function normalizeProfile(value: Partial<Profile> & { id: string }): Profile {
+  const root = value.id === ROOT_ADMIN_ID || value.email?.toLowerCase() === ROOT_ADMIN_EMAIL;
+  return {
+    id: value.id,
+    fullName: value.fullName || (root ? "NOVA INVEST Administrator" : "NOVA Member"),
+    phone: value.phone || "",
+    email: value.email,
+    referralCode: value.referralCode || "",
+    referredBy: value.referredBy || "",
+    createdAt: value.createdAt || now(),
+    kycStatus: value.kycStatus || (root ? "approved" : "not_submitted"),
+    accountStatus: value.accountStatus || "active",
+    role: value.role || (root ? "admin" : "user"),
+    permissions: root ? ["*"] : value.permissions,
+    passwordHash: value.passwordHash,
+  };
+}
+
+async function getProfile(id: string) {
+  const profile = await kv.get(`profile:${id}`) as (Partial<Profile> & { id: string }) | undefined;
+  return profile ? normalizeProfile(profile) : undefined;
+}
+
+async function getAccount(userId: string) {
+  return (await kv.get(`account:${userId}`) as Account | undefined) ?? {
+    available: 0,
+    invested: 0,
+    currency: "TUSDT",
+    updatedAt: now(),
+  };
+}
+
+async function allProfiles() {
+  const profiles = await kv.getByPrefix("profile:") as Array<Partial<Profile> & { id: string }>;
+  return profiles.filter((profile) => profile?.id).map(normalizeProfile);
+}
+
+async function profileByReferral(code: string) {
+  const directId = await kv.get(`referral:${code}`);
+  if (directId) return await getProfile(String(directId));
+  return (await allProfiles()).find((profile) => profile.referralCode === code);
+}
+
+async function resolveReferrer(code: string) {
+  if (code === FOUNDING_REFERRAL_CODE) return await bootstrapRootAdmin();
+  return await profileByReferral(code);
+}
+
+function canUseReferral(profile: Profile | undefined) {
+  return Boolean(profile && !["suspended", "revoked", "deleted"].includes(profile.accountStatus));
+}
+
+function normalizePhone(value: unknown) {
+  const compact = cleanText(value, 30).replace(/[^\d+]/g, "");
+  const phone = compact.startsWith("+") ? `+${compact.slice(1).replace(/\D/g, "")}` : compact;
+  if (!/^\+[1-9]\d{7,14}$/.test(phone)) {
+    throw new Error("Enter a valid mobile number with the correct country code.");
+  }
+  return phone;
+}
+
+async function findAuthUserByPhone(phone: string) {
+  for (let page = 1; page <= 10; page++) {
+    const { data, error: listError } = await supabase().auth.admin.listUsers({ page, perPage: 100 });
+    if (listError) throw listError;
+    const match = data.users.find((user) => user.phone === phone);
+    if (match) return match;
+    if (data.users.length < 100) break;
+  }
+  return undefined;
+}
+
+async function createReferralCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  for (let attempt = 0; attempt < 30; attempt++) {
+    let suffix = "";
+    const bytes = crypto.getRandomValues(new Uint8Array(6));
+    for (const byte of bytes) suffix += alphabet[byte % alphabet.length];
+    const code = `NI-${suffix}`;
+    if (!await profileByReferral(code)) return code;
+  }
+  throw new Error("A referral code could not be generated. Please try again.");
+}
+
+async function requireUser(c: Context) {
+  const token = bearer(c);
+  if (!token) throw new Error("Authentication is required.");
+  const { data, error: authError } = await supabase().auth.getUser(token);
+  if (authError || !data.user) throw new Error("Your session is invalid or has expired.");
+  const profile = await getProfile(data.user.id);
+  if (!profile || profile.role !== "user") throw new Error("Your account profile was not found.");
+  if (profile.accountStatus !== "active") {
+    const labels: Record<AccountStatus, string> = {
+      active: "active",
+      pending: "pending activation",
+      suspended: "suspended",
+      revoked: "revoked",
+      deleted: "deleted",
+    };
+    throw new Error(`Your account access is ${labels[profile.accountStatus]}. Contact support.`);
+  }
+  return profile;
+}
+
+async function requireAdmin(c: Context, permission?: Permission) {
+  const token = bearer(c);
+  if (!token) throw new Error("Administrator authentication is required.");
+  const session = await kv.get(`admin-session:${token}`) as AdminSession | undefined;
+  if (!session || new Date(session.expiresAt).getTime() <= Date.now()) {
+    if (session) await kv.del(`admin-session:${token}`);
+    throw new Error("Your administrator session is invalid or has expired.");
+  }
+  const profile = await getProfile(session.adminId);
+  if (!profile || profile.role !== "admin" || profile.accountStatus !== "active") {
+    await kv.del(`admin-session:${token}`);
+    throw new Error("Administrator access has been revoked.");
+  }
+  if (permission && !profile.permissions?.includes("*") && !profile.permissions?.includes(permission)) {
+    throw new Error("You do not have permission to perform this action.");
+  }
+  return profile;
+}
+
+async function audit(admin: Profile, action: string, targetId: string | undefined, detail: string) {
+  const createdAt = now();
+  const entry = {
+    id: id(),
+    adminId: admin.id,
+    adminName: admin.fullName,
+    action,
+    targetId,
+    detail,
+    createdAt,
+  };
+  await kv.set(`audit:${createdAt}:${entry.id}`, entry);
+}
+
+async function postLedger(
+  userId: string,
+  type: string,
+  amount: number,
+  account: Account,
+  note: string,
+) {
+  const createdAt = now();
+  const entry = {
+    id: id(),
+    userId,
+    type,
+    amount: round(amount),
+    availableAfter: account.available,
+    investedAfter: account.invested,
+    note,
+    createdAt,
+  };
+  await kv.set(`ledger:${userId}:${createdAt}:${entry.id}`, entry);
+  return entry;
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+function base64ToBytes(value: string) {
+  const binary = atob(value);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+async function hashPassword(password: string, saltValue?: string) {
+  if (password.length < 8) throw new Error("Password must contain at least 8 characters.");
+  const encoder = new TextEncoder();
+  const salt = saltValue ? base64ToBytes(saltValue) : crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", hash: "SHA-256", salt, iterations: 120000 },
+    key,
+    256,
+  );
+  return `pbkdf2$120000$${bytesToBase64(salt)}$${bytesToBase64(new Uint8Array(bits))}`;
+}
+
+async function verifyPassword(password: string, encoded = "") {
+  const [algorithm, iterations, salt, expected] = encoded.split("$");
+  if (algorithm !== "pbkdf2" || iterations !== "120000" || !salt || !expected) return false;
+  const actual = await hashPassword(password, salt);
+  const actualBytes = new TextEncoder().encode(actual);
+  const expectedBytes = new TextEncoder().encode(encoded);
+  if (actualBytes.length !== expectedBytes.length) return false;
+  let difference = 0;
+  for (let index = 0; index < actualBytes.length; index++) {
+    difference |= actualBytes[index] ^ expectedBytes[index];
+  }
+  return difference === 0;
+}
+
+async function bootstrapRootAdmin() {
+  const configuredPassword = Deno.env.get("NOVA_ADMIN_PASSWORD");
+  if (!configuredPassword || configuredPassword.length < 8) {
+    throw new Error("The root administrator password has not been configured.");
+  }
+  const existing = await getProfile(ROOT_ADMIN_ID) ??
+    (await allProfiles()).find((profile) => profile.email?.toLowerCase() === ROOT_ADMIN_EMAIL);
+  if (existing) {
+    existing.fullName = existing.fullName || "NOVA INVEST Administrator";
+    existing.email = ROOT_ADMIN_EMAIL;
+    existing.phone = existing.phone || "";
+    existing.referralCode = existing.referralCode || await createReferralCode();
+    existing.referredBy = existing.referredBy || "";
+    existing.createdAt = existing.createdAt || now();
+    existing.kycStatus = "approved";
+    existing.accountStatus = "active";
+    existing.role = "admin";
+    existing.permissions = ["*"];
+    if (!existing.passwordHash) {
+      existing.passwordHash = await hashPassword(configuredPassword);
+    }
+    await kv.mset(
+      [
+        `profile:${existing.id}`,
+        `referral:${existing.referralCode}`,
+        `referral:${FOUNDING_REFERRAL_CODE}`,
+      ],
+      [existing, existing.id, existing.id],
+    );
+    return existing;
+  }
+  const profile: Profile = {
+    id: ROOT_ADMIN_ID,
+    fullName: "NOVA INVEST Administrator",
+    email: ROOT_ADMIN_EMAIL,
+    phone: "",
+    referralCode: FOUNDING_REFERRAL_CODE,
+    referredBy: "",
+    createdAt: now(),
+    kycStatus: "approved",
+    accountStatus: "active",
+    role: "admin",
+    permissions: ["*"],
+    passwordHash: await hashPassword(configuredPassword),
   };
   await kv.mset(
-    [`profile:${user.id}`, `referral:${user.referralCode}`, `account:${user.id}`],
-    [user, user.id, { available: 0, invested: 0, currency: "TUSDT", updatedAt: now() }],
+    [
+      `profile:${profile.id}`,
+      `referral:${profile.referralCode}`,
+      `referral:${FOUNDING_REFERRAL_CODE}`,
+    ],
+    [profile, profile.id, profile.id],
   );
-  return c.json({ profile: user }, 201);
-});
-app.get(`${ROOT}/me`, async (c) => {
-  const token = bearer(c);
-  if (token) {
-    const session = await kv.get(`admin-session:${await hash(token)}`);
-    const admin = session && Date.parse(session.expiresAt) > Date.now() ? await profile(session.adminId) : null;
-    if (admin?.role === "admin" && admin.accountStatus === "active") return c.json({ profile: admin });
+  return profile;
+}
+
+app.get(`${PREFIX}/health`, (c) => c.json({ status: "ok", version: "2026-10-23.1" }));
+
+app.get(`${PREFIX}/referrals/:code`, async (c) => {
+  try {
+    const code = cleanText(c.req.param("code"), 20).toUpperCase();
+    if (!/^NI-[A-Z0-9]{6}$/.test(code)) return c.json({ valid: false });
+    const profile = await resolveReferrer(code);
+    return c.json({ valid: canUseReferral(profile) });
+  } catch (reason) {
+    return error(c, reason);
   }
-  const auth = await userAuth(c);
-  return auth.error ?? c.json({ profile: auth.user });
-});
-app.get(`${ROOT}/account`, async (c) => {
-  const auth = await userAuth(c);
-  if (auth.error) return auth.error;
-  const [balance, entries, requests] = await Promise.all([account(auth.user.id), kv.getByPrefix(`ledger:${auth.user.id}:`), kv.getByPrefix("request:")]);
-  return c.json({ account: balance, ledger: entries, requests: requests.filter((item: any) => item.userId === auth.user.id) });
-});
-app.post(`${ROOT}/requests`, async (c) => {
-  const auth = await userAuth(c);
-  if (auth.error) return auth.error;
-  if (auth.user.accountStatus !== "active") return fail(c, 403, "Your account must be activated first.");
-  const body = await c.req.json().catch(() => ({}));
-  const type = String(body.type);
-  const value = amount(body.amount);
-  const detail = String(body.detail ?? "").trim().slice(0, 500);
-  if (!["deposit", "withdrawal"].includes(type) || !(value > 0)) return fail(c, 400, "Invalid funding request.");
-  if (type === "withdrawal") {
-    if (auth.user.kycStatus !== "approved") return fail(c, 403, "Approved KYC is required.");
-    if (!/binance/i.test(detail)) return fail(c, 400, "A Binance reference is required.");
-    if ((await account(auth.user.id)).available < value) return fail(c, 400, "Insufficient available balance.");
-  }
-  const request = { id: uid(), userId: auth.user.id, userName: auth.user.fullName, type, amount: value, detail, status: "pending", createdAt: now() };
-  await kv.set(`request:${request.id}`, request);
-  return c.json({ request }, 201);
-});
-app.post(`${ROOT}/kyc`, async (c) => {
-  const auth = await userAuth(c);
-  if (auth.error) return auth.error;
-  const body = await c.req.json().catch(() => ({}));
-  const documents = Array.isArray(body.documents) ? body.documents.slice(0, 3) : [];
-  if (!body.fullName || !body.documentType || !documents.length || !body.selfie?.dataUrl) return fail(c, 400, "Personal details, document, and selfie are required.");
-  const client = db();
-  await client.storage.createBucket(KYC_BUCKET, { public: false }).catch(() => undefined);
-  const saved = [];
-  for (const file of [...documents, { ...body.selfie, label: "Selfie" }]) {
-    const match = String(file.dataUrl ?? "").match(/^data:([^;]+);base64,(.+)$/);
-    if (!match) return fail(c, 400, "Invalid KYC upload.");
-    const bytes = Uint8Array.from(atob(match[2]), (character) => character.charCodeAt(0));
-    if (bytes.byteLength > 5 * 1024 * 1024) return fail(c, 400, "Each file must be 5 MB or smaller.");
-    const extension = String(file.name ?? "file.bin").split(".").pop()?.replace(/[^\w]/g, "") || "bin";
-    const path = `${auth.user.id}/${uid()}.${extension}`;
-    const { error } = await client.storage.from(KYC_BUCKET).upload(path, bytes, { contentType: match[1] });
-    if (error) return fail(c, 500, "A KYC file could not be stored.");
-    saved.push({ label: file.label, name: file.name, type: match[1], path });
-  }
-  const submission = {
-    id: uid(), userId: auth.user.id, status: "pending", submittedAt: now(), reviewedAt: null, reviewNote: "",
-    details: {
-      fullName: String(body.fullName).slice(0, 120), dateOfBirth: String(body.dateOfBirth ?? "").slice(0, 20),
-      nationality: String(body.nationality ?? "").slice(0, 80), phone: String(body.phone ?? "").slice(0, 30),
-      gender: String(body.gender ?? "").slice(0, 30), address: String(body.address ?? "").slice(0, 300),
-      documentType: String(body.documentType).slice(0, 80), documentNumber: String(body.documentNumber ?? "").slice(0, 100),
-      issueDate: String(body.issueDate ?? "").slice(0, 20), expiryDate: String(body.expiryDate ?? "").slice(0, 20),
-      issuingCountry: String(body.issuingCountry ?? "").slice(0, 80),
-    },
-    documents: saved,
-  };
-  auth.user.kycStatus = "pending";
-  await kv.mset([`kyc:${auth.user.id}`, `profile:${auth.user.id}`], [submission, auth.user]);
-  return c.json({ submission }, 201);
-});
-app.post(`${ROOT}/profit-codes/claim`, async (c) => {
-  const auth = await userAuth(c);
-  if (auth.error) return auth.error;
-  if (auth.user.accountStatus !== "active") return fail(c, 403, "Your account is not active.");
-  const body = await c.req.json().catch(() => ({}));
-  const code = String(body.code ?? "").trim().toUpperCase();
-  const item = await kv.get(`profit-code:${code}`);
-  if (!item?.active || (item.expiresAt && Date.parse(item.expiresAt) <= Date.now())) return fail(c, 400, "Invalid or expired Profit Code.");
-  if (await kv.get(`profit-claim:${code}:${auth.user.id}`)) return fail(c, 409, "This code has already been claimed.");
-  const balance = await account(auth.user.id);
-  const reward = item.kind === "percentage"
-    ? Math.round((balance.available + balance.invested) * Number(item.value) * 100) / 10000
-    : amount(item.value);
-  if (!(reward > 0)) return fail(c, 400, "This code has no positive distribution.");
-  balance.available += reward;
-  await saveAccount(auth.user.id, balance);
-  const claim = { code, userId: auth.user.id, amount: reward, value: item.value, kind: item.kind, claimedAt: now() };
-  await kv.set(`profit-claim:${code}:${auth.user.id}`, claim);
-  await ledger(auth.user.id, "profit_code", reward, balance, `Profit Code ${code}`);
-  return c.json({ claim, account: balance });
-});
-app.get(`${ROOT}/profit-codes/history`, async (c) => {
-  const auth = await userAuth(c);
-  if (auth.error) return auth.error;
-  const claims = (await kv.getByPrefix("profit-claim:")).filter((item: any) => item.userId === auth.user.id);
-  return c.json({ claims });
 });
 
-app.get(`${ROOT}/admin/bootstrap`, async (c) => {
-  try { await bootstrap(); return c.json({ ready: true }); }
-  catch (error) { return fail(c, 503, error instanceof Error ? error.message : "Admin access is not configured."); }
-});
-app.post(`${ROOT}/admin/login`, async (c) => {
-  await bootstrap();
-  const body = await c.req.json().catch(() => ({}));
-  const email = String(body.email ?? "").trim().toLowerCase();
-  const adminId = await kv.get(`admin-email:${email}`);
-  const admin = adminId ? await profile(adminId) : null;
-  const record = adminId ? await kv.get(`admin-password:${adminId}`) : null;
-  if (!admin || admin.role !== "admin" || admin.accountStatus !== "active" || !(await passwordMatches(String(body.password ?? ""), record))) {
-    return fail(c, 401, "Invalid administrator credentials.");
-  }
-  const token = `${uid()}${uid()}`.replaceAll("-", "");
-  const tokenHash = await hash(token);
-  const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
-  await kv.set(`admin-session:${tokenHash}`, { tokenHash, adminId: admin.id, expiresAt });
-  await audit(admin, "admin.login", admin.id, "Administrator signed in.");
-  return c.json({ profile: admin, token, expiresAt });
-});
-app.post(`${ROOT}/admin/logout`, async (c) => {
-  const auth = await adminAuth(c);
-  if (auth.error) return auth.error;
-  await kv.del(`admin-session:${auth.tokenHash}`);
-  return c.json({ success: true });
-});
-app.get(`${ROOT}/admin/overview`, async (c) => {
-  const auth = await adminAuth(c);
-  if (auth.error) return auth.error;
-  const [profiles, requests, investments, profitCodes, audits, notes, submissions] = await Promise.all([
-    kv.getByPrefix("profile:"), kv.getByPrefix("request:"), kv.getByPrefix("investment:"),
-    kv.getByPrefix("profit-code:"), kv.getByPrefix("audit:"), kv.getByPrefix("admin-note:"), kv.getByPrefix("kyc:"),
-  ]);
-  const client = db();
-  const kycs = await Promise.all(submissions.map(async (submission: any) => ({
-    ...submission,
-    documents: await Promise.all((submission.documents ?? []).map(async (file: any) => {
-      const { data } = await client.storage.from(KYC_BUCKET).createSignedUrl(file.path, 900);
-      return { ...file, url: data?.signedUrl ?? "" };
-    })),
-  })));
-  const enriched = await Promise.all(profiles.map(async (item: any) => ({ ...item, account: await account(item.id) })));
-  const seeProfiles = ["users", "funding", "kyc", "balances", "investments", "admins"].some((permission) => can(auth.admin, permission));
-  return c.json({
-    profiles: seeProfiles ? enriched : [],
-    requests: can(auth.admin, "funding") ? requests : [],
-    investments: can(auth.admin, "investments") ? investments : [],
-    profitCodes: can(auth.admin, "profit_codes") ? profitCodes : [],
-    audits: can(auth.admin, "audit") ? audits.sort((a: any, b: any) => b.createdAt.localeCompare(a.createdAt)).slice(0, 300) : [],
-    notes: can(auth.admin, "users") ? notes : [],
-    kycs: can(auth.admin, "kyc") ? kycs : [],
-  });
-});
-app.post(`${ROOT}/admin/requests/:id`, async (c) => {
-  const auth = await adminAuth(c, "funding");
-  if (auth.error) return auth.error;
-  const request = await kv.get(`request:${c.req.param("id")}`);
-  if (!request || request.status !== "pending") return fail(c, 409, "Pending request not found.");
-  const body = await c.req.json().catch(() => ({}));
-  if (!["approved", "rejected"].includes(body.decision)) return fail(c, 400, "Invalid decision.");
-  const user = await profile(request.userId);
-  if (!user || user.accountStatus !== "active") return fail(c, 409, "Customer account is not active.");
-  if (body.decision === "approved") {
-    const balance = await account(user.id);
-    if (request.type === "deposit") {
-      balance.available += request.amount;
-      await saveAccount(user.id, balance);
-      await ledger(user.id, "deposit", request.amount, balance, `Approved by ${auth.admin.fullName}`);
-      await referralRewards(user, request.amount);
+app.post(`${PREFIX}/signup`, async (c) => {
+  let createdAuthUserId = "";
+  try {
+    const input = await body(c);
+    const fullName = cleanText(input.fullName, 120);
+    const phone = normalizePhone(input.phone);
+    const password = String(input.password ?? "");
+    const referralCode = cleanText(input.referralCode, 20).toUpperCase();
+    if (fullName.length < 2) throw new Error("Enter your full name.");
+    if (phone.length < 8) throw new Error("Enter a valid mobile number.");
+    if (password.length < 8) throw new Error("Password must contain at least 8 characters.");
+    const referrer = await resolveReferrer(referralCode);
+    if (!canUseReferral(referrer)) throw new Error("The referral code is invalid or inactive.");
+
+    const { data, error: authError } = await supabase().auth.admin.createUser({
+      phone,
+      password,
+      phone_confirm: true,
+      user_metadata: { full_name: fullName },
+    });
+    let authUser = data.user;
+    if (authError || !authUser) {
+      if (!/(already|registered|exists)/i.test(authError?.message || "")) {
+        throw authError ?? new Error("The account could not be created.");
+      }
+      authUser = await findAuthUserByPhone(phone);
+      if (!authUser || await getProfile(authUser.id)) {
+        throw new Error("An account already exists for this mobile number.");
+      }
+      const { data: recovered, error: recoveryError } = await supabase().auth.admin.updateUserById(
+        authUser.id,
+        { password, phone_confirm: true, user_metadata: { full_name: fullName } },
+      );
+      if (recoveryError || !recovered.user) throw recoveryError ?? new Error("The account could not be recovered.");
+      authUser = recovered.user;
     } else {
-      if (user.kycStatus !== "approved" || balance.available < request.amount) return fail(c, 409, "KYC or balance requirement is no longer satisfied.");
-      balance.available -= request.amount;
-      await saveAccount(user.id, balance);
-      await ledger(user.id, "withdrawal", -request.amount, balance, `Approved by ${auth.admin.fullName}`);
+      createdAuthUserId = authUser.id;
     }
+    const profile: Profile = {
+      id: authUser.id,
+      fullName,
+      phone,
+      referralCode: await createReferralCode(),
+      referredBy: referralCode,
+      createdAt: now(),
+      kycStatus: "not_submitted",
+      accountStatus: "active",
+      role: "user",
+    };
+    const account: Account = { available: 0, invested: 0, currency: "TUSDT", updatedAt: now() };
+    await kv.mset(
+      [`profile:${profile.id}`, `account:${profile.id}`, `referral:${profile.referralCode}`],
+      [profile, account, profile.id],
+    );
+    return c.json({ profile: publicProfile(profile, account) }, 201);
+  } catch (reason) {
+    if (createdAuthUserId) await supabase().auth.admin.deleteUser(createdAuthUserId).catch(() => undefined);
+    return error(c, reason);
   }
-  request.status = body.decision;
-  request.reviewedAt = now();
-  request.reviewedBy = auth.admin.id;
-  await kv.set(`request:${request.id}`, request);
-  await audit(auth.admin, `funding.${body.decision}`, request.id, `${request.type} ${request.amount} TUSDT for ${request.userName}.`);
-  return c.json({ request });
-});
-app.post(`${ROOT}/admin/users/:id/status`, async (c) => {
-  const auth = await adminAuth(c, "users");
-  if (auth.error) return auth.error;
-  const user = await profile(c.req.param("id"));
-  const body = await c.req.json().catch(() => ({}));
-  if (!user || user.role === "admin" || !["pending", "active", "suspended", "revoked"].includes(body.status)) return fail(c, 400, "Invalid customer status.");
-  user.accountStatus = body.status;
-  await kv.set(`profile:${user.id}`, user);
-  await db().auth.admin.updateUserById(user.id, { ban_duration: ["active", "pending"].includes(body.status) ? "none" : body.status === "revoked" ? "876000h" : "8760h" });
-  await audit(auth.admin, `user.${body.status}`, user.id, `Account changed to ${body.status}.`);
-  return c.json({ profile: user });
-});
-app.delete(`${ROOT}/admin/users/:id`, async (c) => {
-  const auth = await adminAuth(c, "users");
-  if (auth.error) return auth.error;
-  const user = await profile(c.req.param("id"));
-  if (!user || user.role === "admin") return fail(c, 404, "Customer not found.");
-  user.accountStatus = "deleted";
-  user.deletedAt = now();
-  await kv.set(`profile:${user.id}`, user);
-  await kv.del(`referral:${user.referralCode}`);
-  await db().auth.admin.deleteUser(user.id, true);
-  await audit(auth.admin, "user.deleted", user.id, "Access deleted; financial history retained.");
-  return c.json({ profile: user });
-});
-app.post(`${ROOT}/admin/users/:id/password`, async (c) => {
-  const auth = await adminAuth(c, "users");
-  if (auth.error) return auth.error;
-  const user = await profile(c.req.param("id"));
-  const body = await c.req.json().catch(() => ({}));
-  if (!user || user.role === "admin" || String(body.password ?? "").length < 8) return fail(c, 400, "Customer and 8-character password are required.");
-  const { error } = await db().auth.admin.updateUserById(user.id, { password: body.password });
-  if (error) return fail(c, 400, error.message);
-  await audit(auth.admin, "user.password_reset", user.id, "Customer password reset.");
-  return c.json({ success: true });
-});
-app.post(`${ROOT}/admin/users/:id/balance`, async (c) => {
-  const auth = await adminAuth(c, "balances");
-  if (auth.error) return auth.error;
-  const user = await profile(c.req.param("id"));
-  const body = await c.req.json().catch(() => ({}));
-  const value = amount(body.amount);
-  const note = String(body.note ?? "").trim().slice(0, 300);
-  if (!user || user.role === "admin" || !(value >= 0) || !["credit", "debit", "set"].includes(body.operation) || !note) return fail(c, 400, "Valid adjustment and reason are required.");
-  const balance = await account(user.id);
-  const before = balance.available;
-  if (body.operation === "credit") balance.available += value;
-  if (body.operation === "debit") balance.available -= value;
-  if (body.operation === "set") balance.available = value;
-  if (balance.available < 0) return fail(c, 409, "Adjustment would create a negative balance.");
-  await saveAccount(user.id, balance);
-  await ledger(user.id, "admin_adjustment", balance.available - before, balance, note);
-  await audit(auth.admin, "balance.adjusted", user.id, `${body.operation} ${value}: ${note}`);
-  return c.json({ account: balance });
-});
-app.post(`${ROOT}/admin/users/:id/kyc`, async (c) => {
-  const auth = await adminAuth(c, "kyc");
-  if (auth.error) return auth.error;
-  const user = await profile(c.req.param("id"));
-  const body = await c.req.json().catch(() => ({}));
-  const submission = user ? await kv.get(`kyc:${user.id}`) : null;
-  if (!user || user.role === "admin" || !["approved", "rejected", "pending"].includes(body.status)) return fail(c, 400, "Invalid KYC review.");
-  if (!submission && body.status === "approved") return fail(c, 409, "No KYC documents have been submitted.");
-  user.kycStatus = body.status;
-  await kv.set(`profile:${user.id}`, user);
-  if (submission) {
-    submission.status = body.status; submission.reviewedAt = now(); submission.reviewedBy = auth.admin.id; submission.reviewNote = String(body.note ?? "").slice(0, 500);
-    await kv.set(`kyc:${user.id}`, submission);
-  }
-  await audit(auth.admin, `kyc.${body.status}`, user.id, submission?.reviewNote || `KYC changed to ${body.status}.`);
-  return c.json({ profile: user });
-});
-app.post(`${ROOT}/admin/users/:id/notes`, async (c) => {
-  const auth = await adminAuth(c, "users");
-  if (auth.error) return auth.error;
-  const user = await profile(c.req.param("id"));
-  const body = await c.req.json().catch(() => ({}));
-  const text = String(body.text ?? "").trim().slice(0, 1000);
-  if (!user || user.role === "admin" || !text) return fail(c, 400, "Customer and note are required.");
-  const note = { id: uid(), userId: user.id, text, adminId: auth.admin.id, adminName: auth.admin.fullName, createdAt: now() };
-  await kv.set(`admin-note:${user.id}:${note.id}`, note);
-  await audit(auth.admin, "user.note_added", user.id, text);
-  return c.json({ note }, 201);
-});
-app.post(`${ROOT}/admin/investments`, async (c) => {
-  const auth = await adminAuth(c, "investments");
-  if (auth.error) return auth.error;
-  const body = await c.req.json().catch(() => ({}));
-  const user = await profile(String(body.userId ?? ""));
-  const value = amount(body.amount);
-  if (!user || user.role === "admin" || user.accountStatus !== "active" || !(value > 0) || !MARKETS.includes(body.market)) return fail(c, 400, "Valid customer, amount, and market are required.");
-  const balance = await account(user.id);
-  if (balance.available < value) return fail(c, 409, "Insufficient available balance.");
-  balance.available -= value; balance.invested += value;
-  await saveAccount(user.id, balance);
-  const investment = { id: uid(), userId: user.id, market: body.market, principal: value, status: "open", createdAt: now() };
-  await kv.set(`investment:${investment.id}`, investment);
-  await ledger(user.id, "investment_allocated", -value, balance, `${body.market} allocation`);
-  await audit(auth.admin, "investment.allocated", investment.id, `${value} TUSDT to ${body.market}.`);
-  return c.json({ investment }, 201);
-});
-app.post(`${ROOT}/admin/investments/:id/settle`, async (c) => {
-  const auth = await adminAuth(c, "investments");
-  if (auth.error) return auth.error;
-  const investment = await kv.get(`investment:${c.req.param("id")}`);
-  const body = await c.req.json().catch(() => ({}));
-  const profit = amount(body.profit);
-  if (!investment || investment.status !== "open" || !Number.isFinite(profit) || investment.principal + profit < 0) return fail(c, 400, "Invalid settlement.");
-  const balance = await account(investment.userId);
-  balance.invested -= investment.principal; balance.available += investment.principal + profit;
-  await saveAccount(investment.userId, balance);
-  investment.status = "settled"; investment.profit = profit; investment.settledAt = now();
-  await kv.set(`investment:${investment.id}`, investment);
-  await ledger(investment.userId, "investment_settled", investment.principal + profit, balance, `${investment.market} settled; P/L ${profit}`);
-  await audit(auth.admin, "investment.settled", investment.id, `P/L ${profit} TUSDT.`);
-  return c.json({ investment });
-});
-app.post(`${ROOT}/admin/profit-codes`, async (c) => {
-  const auth = await adminAuth(c, "profit_codes");
-  if (auth.error) return auth.error;
-  const body = await c.req.json().catch(() => ({}));
-  const code = String(body.code ?? "").trim().toUpperCase();
-  const value = amount(body.value);
-  if (!/^NI-[A-Z0-9-]{4,30}$/.test(code) || !["fixed", "percentage"].includes(body.kind) || !(value > 0) || (body.kind === "percentage" && value > 100)) return fail(c, 400, "Invalid Profit Code.");
-  if (await kv.get(`profit-code:${code}`)) return fail(c, 409, "Profit Code already exists.");
-  const profitCode = { code, kind: body.kind, value, active: true, expiresAt: body.expiresAt || null, createdAt: now(), createdBy: auth.admin.id };
-  await kv.set(`profit-code:${code}`, profitCode);
-  await audit(auth.admin, "profit_code.created", code, `${body.kind} distribution of ${value}.`);
-  return c.json({ profitCode }, 201);
-});
-app.post(`${ROOT}/admin/profit-codes/:code/status`, async (c) => {
-  const auth = await adminAuth(c, "profit_codes");
-  if (auth.error) return auth.error;
-  const code = c.req.param("code").toUpperCase();
-  const item = await kv.get(`profit-code:${code}`);
-  const body = await c.req.json().catch(() => ({}));
-  if (!item) return fail(c, 404, "Profit Code not found.");
-  item.active = Boolean(body.active);
-  await kv.set(`profit-code:${code}`, item);
-  await audit(auth.admin, `profit_code.${item.active ? "activated" : "deactivated"}`, code, code);
-  return c.json({ profitCode: item });
-});
-app.post(`${ROOT}/admin/admins`, async (c) => {
-  const auth = await adminAuth(c, "admins");
-  if (auth.error) return auth.error;
-  const body = await c.req.json().catch(() => ({}));
-  const email = String(body.email ?? "").trim().toLowerCase();
-  const password = String(body.password ?? "");
-  const fullName = String(body.fullName ?? "").trim();
-  const permissions = Array.isArray(body.permissions) ? body.permissions.filter((item: string) => PERMISSIONS.includes(item)) : [];
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || fullName.length < 2 || password.length < 8) return fail(c, 400, "Valid name, email, and password are required.");
-  if (await kv.get(`admin-email:${email}`)) return fail(c, 409, "Administrator email already exists.");
-  const admin = {
-    id: `admin-${uid()}`, fullName, phone: "", email, referralCode: await referralCode(), referredBy: auth.admin.referralCode,
-    createdAt: now(), kycStatus: "approved", accountStatus: "active", role: "admin", permissions,
-  };
-  await kv.mset([`profile:${admin.id}`, `admin-email:${email}`, `admin-password:${admin.id}`], [admin, admin.id, await passwordRecord(password)]);
-  await audit(auth.admin, "admin.created", admin.id, `${email}: ${permissions.join(", ")}`);
-  return c.json({ profile: admin }, 201);
-});
-app.post(`${ROOT}/admin/admins/:id`, async (c) => {
-  const auth = await adminAuth(c, "admins");
-  if (auth.error) return auth.error;
-  if (c.req.param("id") === auth.admin.id) return fail(c, 400, "You cannot revoke your own session.");
-  const admin = await profile(c.req.param("id"));
-  const body = await c.req.json().catch(() => ({}));
-  if (!admin || admin.role !== "admin" || admin.id === "admin-root") return fail(c, 404, "Managed administrator not found.");
-  if (Array.isArray(body.permissions)) admin.permissions = body.permissions.filter((item: string) => PERMISSIONS.includes(item));
-  if (["active", "revoked"].includes(body.status)) admin.accountStatus = body.status;
-  if (body.password !== undefined) {
-    if (String(body.password).length < 8) return fail(c, 400, "Password must contain at least 8 characters.");
-    await kv.set(`admin-password:${admin.id}`, await passwordRecord(String(body.password)));
-  }
-  await kv.set(`profile:${admin.id}`, admin);
-  await audit(auth.admin, "admin.updated", admin.id, `Status ${admin.accountStatus}; permissions ${(admin.permissions ?? []).join(", ")}.`);
-  return c.json({ profile: admin });
 });
 
-app.notFound((c) => fail(c, 404, "Endpoint not found."));
-app.onError((error, c) => {
-  console.error(error);
-  return fail(c, 500, "The server could not complete this request.");
+app.get(`${PREFIX}/me`, async (c) => {
+  try {
+    const token = bearer(c);
+    const adminSession = token ? await kv.get(`admin-session:${token}`) as AdminSession | undefined : undefined;
+    if (adminSession) {
+      const admin = await requireAdmin(c);
+      return c.json({ profile: publicProfile(admin) });
+    }
+    const profile = await requireUser(c);
+    return c.json({ profile: publicProfile(profile, await getAccount(profile.id)) });
+  } catch (reason) {
+    return error(c, reason, 401);
+  }
 });
+
+app.get(`${PREFIX}/account`, async (c) => {
+  try {
+    const profile = await requireUser(c);
+    const [account, ledger, requests] = await Promise.all([
+      getAccount(profile.id),
+      kv.getByPrefix(`ledger:${profile.id}:`),
+      kv.getByPrefix(`request-user:${profile.id}:`),
+    ]);
+    return c.json({ account, ledger, requests });
+  } catch (reason) {
+    return error(c, reason, 401);
+  }
+});
+
+app.post(`${PREFIX}/requests`, async (c) => {
+  try {
+    const profile = await requireUser(c);
+    const input = await body(c);
+    const type = input.type;
+    if (type !== "deposit" && type !== "withdrawal") throw new Error("Choose a valid request type.");
+    const amount = finitePositive(input.amount);
+    const detail = cleanText(input.detail, 300);
+    if (type === "withdrawal") {
+      if (profile.kycStatus !== "approved") {
+        throw new Error("KYC approval is required before requesting a withdrawal.");
+      }
+      if (!detail || !/binance/i.test(detail)) {
+        throw new Error("Enter the approved Binance wallet or Binance account reference.");
+      }
+      const [account, requests] = await Promise.all([
+        getAccount(profile.id),
+        kv.getByPrefix(`request-user:${profile.id}:`) as Promise<FundingRequest[]>,
+      ]);
+      const reserved = requests
+        .filter((request) => request.type === "withdrawal" && request.status === "pending")
+        .reduce((total, request) => total + request.amount, 0);
+      if (amount > round(account.available - reserved)) {
+        throw new Error("The withdrawal exceeds your available balance after pending requests.");
+      }
+    }
+    const createdAt = now();
+    const request: FundingRequest = {
+      id: id(),
+      userId: profile.id,
+      userName: profile.fullName,
+      type,
+      amount,
+      detail,
+      status: "pending",
+      createdAt,
+    };
+    await kv.mset(
+      [`request:${request.id}`, `request-user:${profile.id}:${createdAt}:${request.id}`],
+      [request, request],
+    );
+    return c.json({ request }, 201);
+  } catch (reason) {
+    return error(c, reason);
+  }
+});
+
+app.post(`${PREFIX}/kyc`, async (c) => {
+  try {
+    const profile = await requireUser(c);
+    const input = await body(c);
+    const required = ["fullName", "gender", "documentType", "documentNumber"];
+    for (const field of required) {
+      if (!cleanText(input[field], 200)) throw new Error("Complete all required KYC fields.");
+    }
+    const documents = Array.isArray(input.documents) ? input.documents : [];
+    const selfie = input.selfie as Record<string, unknown> | undefined;
+    if (!documents.length || !selfie?.dataUrl) throw new Error("An ID photo and selfie are required.");
+    const submittedAt = now();
+    const submission = {
+      id: id(),
+      userId: profile.id,
+      status: "pending",
+      submittedAt,
+      reviewedAt: null,
+      details: Object.fromEntries(
+        Object.entries(input)
+          .filter(([key]) => !["documents", "selfie"].includes(key))
+          .map(([key, value]) => [key, cleanText(value, 500)]),
+      ),
+      documents: [
+        ...documents.map((document: Record<string, unknown>) => ({
+          label: cleanText(document.label, 80),
+          name: cleanText(document.name, 150),
+          type: "identity",
+          url: cleanText(document.dataUrl, 5_000_000),
+        })),
+        {
+          label: "Selfie",
+          name: cleanText(selfie.name, 150),
+          type: "selfie",
+          url: cleanText(selfie.dataUrl, 5_000_000),
+        },
+      ],
+    };
+    profile.kycStatus = "pending";
+    await kv.mset([`kyc:${profile.id}`, `profile:${profile.id}`], [submission, profile]);
+    return c.json({ submission }, 201);
+  } catch (reason) {
+    return error(c, reason);
+  }
+});
+
+app.post(`${PREFIX}/profit-codes/claim`, async (c) => {
+  try {
+    const profile = await requireUser(c);
+    const input = await body(c);
+    const code = cleanText(input.code, 80).toUpperCase();
+    const profitCode = await kv.get(`profit-code:${code}`);
+    if (!profitCode || !profitCode.active) throw new Error("This Profit Code is invalid or inactive.");
+    if (profitCode.expiresAt && new Date(profitCode.expiresAt).getTime() < Date.now()) {
+      throw new Error("This Profit Code has expired.");
+    }
+    if (await kv.get(`profit-claim:${profile.id}:${code}`)) throw new Error("You have already claimed this Profit Code.");
+    const account = await getAccount(profile.id);
+    const amount = profitCode.kind === "percentage"
+      ? round((account.available + account.invested) * (Number(profitCode.value) / 100))
+      : round(Number(profitCode.value));
+    if (!Number.isFinite(amount) || amount <= 0) throw new Error("This Profit Code has no claimable value.");
+    account.available = round(account.available + amount);
+    account.updatedAt = now();
+    const claim = {
+      code,
+      userId: profile.id,
+      amount,
+      value: profitCode.value,
+      kind: profitCode.kind,
+      claimedAt: now(),
+    };
+    await kv.mset(
+      [`account:${profile.id}`, `profit-claim:${profile.id}:${code}`],
+      [account, claim],
+    );
+    await postLedger(profile.id, "profit_code", amount, account, `Profit Code ${code}`);
+    return c.json({ claim, account });
+  } catch (reason) {
+    return error(c, reason);
+  }
+});
+
+app.get(`${PREFIX}/profit-codes/history`, async (c) => {
+  try {
+    const profile = await requireUser(c);
+    const claims = await kv.getByPrefix(`profit-claim:${profile.id}:`);
+    return c.json({ claims });
+  } catch (reason) {
+    return error(c, reason, 401);
+  }
+});
+
+app.get(`${PREFIX}/admin/bootstrap`, async (c) => {
+  try {
+    await bootstrapRootAdmin();
+    return c.json({ ready: true });
+  } catch (reason) {
+    return error(c, reason, 503);
+  }
+});
+
+app.post(`${PREFIX}/admin/login`, async (c) => {
+  try {
+    await bootstrapRootAdmin();
+    const input = await body(c);
+    const email = cleanText(input.email, 200).toLowerCase();
+    const password = String(input.password ?? "");
+    const profile = (await allProfiles()).find((item) =>
+      item.role === "admin" && item.email?.toLowerCase() === email
+    );
+    if (!profile || !await verifyPassword(password, profile.passwordHash)) {
+      throw new Error("The administrator email or password is incorrect.");
+    }
+    if (profile.accountStatus !== "active") throw new Error("Administrator access has been revoked.");
+    const token = `${crypto.randomUUID()}${crypto.randomUUID().replaceAll("-", "")}`;
+    const session: AdminSession = {
+      token,
+      adminId: profile.id,
+      createdAt: now(),
+      expiresAt: new Date(Date.now() + ADMIN_SESSION_TTL).toISOString(),
+    };
+    await kv.set(`admin-session:${token}`, session);
+    await audit(profile, "admin.login", profile.id, "Administrator signed in.");
+    return c.json({ profile: publicProfile(profile), token });
+  } catch (reason) {
+    return error(c, reason, 401);
+  }
+});
+
+app.post(`${PREFIX}/admin/logout`, async (c) => {
+  const token = bearer(c);
+  if (token) await kv.del(`admin-session:${token}`);
+  return c.json({ success: true });
+});
+
+app.get(`${PREFIX}/admin/overview`, async (c) => {
+  let admin: Profile;
+  try {
+    admin = await requireAdmin(c);
+  } catch (reason) {
+    return error(c, reason, 401);
+  }
+  try {
+    const [profiles, requests, investments, profitCodes, audits, notes, kycs] = await Promise.all([
+      allProfiles(),
+      kv.getByPrefix("request:"),
+      kv.getByPrefix("investment:"),
+      kv.getByPrefix("profit-code:"),
+      kv.getByPrefix("audit:"),
+      kv.getByPrefix("admin-note:"),
+      kv.getByPrefix("kyc:"),
+    ]);
+    const visibleProfiles = await Promise.all((profiles as Profile[]).map(async (profile) =>
+      publicProfile(profile, profile.role === "user" ? await getAccount(profile.id) : undefined)
+    ));
+    return c.json({
+      profiles: visibleProfiles,
+      requests,
+      investments,
+      profitCodes,
+      audits: admin.permissions?.includes("*") || admin.permissions?.includes("audit") ? audits : [],
+      notes,
+      kycs,
+    });
+  } catch (reason) {
+    return error(c, reason, 500);
+  }
+});
+
+app.post(`${PREFIX}/admin/requests/:id`, async (c) => {
+  try {
+    const admin = await requireAdmin(c, "funding");
+    const input = await body(c);
+    const decision = input.decision;
+    if (decision !== "approved" && decision !== "rejected") throw new Error("Choose approve or reject.");
+    const requestId = c.req.param("id");
+    const request = await kv.get(`request:${requestId}`) as FundingRequest | undefined;
+    if (!request) throw new Error("The funding request was not found.");
+    if (request.status !== "pending") throw new Error("This request has already been reviewed.");
+    request.status = decision;
+    request.reviewedAt = now();
+    request.reviewedBy = admin.id;
+    if (decision === "approved") {
+      const account = await getAccount(request.userId);
+      if (request.type === "withdrawal" && request.amount > account.available) {
+        throw new Error("The customer no longer has enough available balance for this withdrawal.");
+      }
+      const delta = request.type === "deposit" ? request.amount : -request.amount;
+      account.available = round(account.available + delta);
+      account.updatedAt = now();
+      await kv.set(`account:${request.userId}`, account);
+      await postLedger(
+        request.userId,
+        request.type,
+        delta,
+        account,
+        `${request.type === "deposit" ? "Deposit" : "Withdrawal"} approved by ${admin.fullName}`,
+      );
+    }
+    await kv.mset(
+      [`request:${request.id}`, `request-user:${request.userId}:${request.createdAt}:${request.id}`],
+      [request, request],
+    );
+    await audit(admin, `funding.${decision}`, request.id, `${request.type} ${request.amount} TUSDT for ${request.userName}.`);
+    return c.json({ request });
+  } catch (reason) {
+    return error(c, reason);
+  }
+});
+
+app.post(`${PREFIX}/admin/users/:id/kyc`, async (c) => {
+  try {
+    const admin = await requireAdmin(c, "kyc");
+    const input = await body(c);
+    const status = input.status as typeof KYC_STATUSES[number];
+    if (!KYC_STATUSES.includes(status)) throw new Error("Choose a valid KYC status.");
+    const userId = c.req.param("id");
+    const profile = await getProfile(userId);
+    const submission = await kv.get(`kyc:${userId}`);
+    if (!profile || profile.role !== "user") throw new Error("The customer was not found.");
+    if (!submission) throw new Error("No KYC submission exists for this customer.");
+    profile.kycStatus = status;
+    submission.status = status;
+    submission.reviewedAt = now();
+    await kv.mset([`profile:${userId}`, `kyc:${userId}`], [profile, submission]);
+    await audit(admin, `kyc.${status}`, userId, `KYC changed to ${status} for ${profile.fullName}.`);
+    return c.json({ profile: publicProfile(profile, await getAccount(userId)) });
+  } catch (reason) {
+    return error(c, reason);
+  }
+});
+
+app.post(`${PREFIX}/admin/users/:id/status`, async (c) => {
+  try {
+    const admin = await requireAdmin(c, "users");
+    const input = await body(c);
+    const status = input.status as typeof USER_STATUSES[number];
+    if (!USER_STATUSES.includes(status)) throw new Error("Choose a valid account status.");
+    const userId = c.req.param("id");
+    const profile = await getProfile(userId);
+    if (!profile || profile.role !== "user") throw new Error("The customer was not found.");
+    profile.accountStatus = status;
+    await kv.set(`profile:${userId}`, profile);
+    if (status !== "active") await supabase().auth.admin.signOut(userId, "global").catch(() => undefined);
+    await audit(admin, `user.${status}`, userId, `Account changed to ${status} for ${profile.fullName}.`);
+    return c.json({ profile: publicProfile(profile, await getAccount(userId)) });
+  } catch (reason) {
+    return error(c, reason);
+  }
+});
+
+app.delete(`${PREFIX}/admin/users/:id`, async (c) => {
+  try {
+    const admin = await requireAdmin(c, "users");
+    const userId = c.req.param("id");
+    const profile = await getProfile(userId);
+    if (!profile || profile.role !== "user") throw new Error("The customer was not found.");
+    profile.accountStatus = "deleted";
+    await kv.set(`profile:${userId}`, profile);
+    await supabase().auth.admin.deleteUser(userId).catch(() => undefined);
+    await audit(admin, "user.deleted", userId, `Access deleted for ${profile.fullName}; financial history retained.`);
+    return c.json({ profile: publicProfile(profile, await getAccount(userId)) });
+  } catch (reason) {
+    return error(c, reason);
+  }
+});
+
+app.post(`${PREFIX}/admin/users/:id/password`, async (c) => {
+  try {
+    const admin = await requireAdmin(c, "users");
+    const input = await body(c);
+    const password = String(input.password ?? "");
+    if (password.length < 8) throw new Error("Password must contain at least 8 characters.");
+    const userId = c.req.param("id");
+    const profile = await getProfile(userId);
+    if (!profile || profile.role !== "user") throw new Error("The customer was not found.");
+    const { error: authError } = await supabase().auth.admin.updateUserById(userId, { password });
+    if (authError) throw authError;
+    await supabase().auth.admin.signOut(userId, "global").catch(() => undefined);
+    await audit(admin, "user.password_reset", userId, `Password reset for ${profile.fullName}.`);
+    return c.json({ success: true });
+  } catch (reason) {
+    return error(c, reason);
+  }
+});
+
+app.post(`${PREFIX}/admin/users/:id/balance`, async (c) => {
+  try {
+    const admin = await requireAdmin(c, "balances");
+    const input = await body(c);
+    const operation = input.operation;
+    if (!["credit", "debit", "set"].includes(String(operation))) throw new Error("Choose a valid balance operation.");
+    const amount = finitePositive(input.amount);
+    const note = cleanText(input.note, 300);
+    if (!note) throw new Error("A reason is required for every balance adjustment.");
+    const userId = c.req.param("id");
+    const profile = await getProfile(userId);
+    if (!profile || profile.role !== "user") throw new Error("The customer was not found.");
+    const account = await getAccount(userId);
+    const previous = account.available;
+    const next = operation === "credit" ? previous + amount : operation === "debit" ? previous - amount : amount;
+    if (next < 0) throw new Error("The adjustment would create a negative available balance.");
+    account.available = round(next);
+    account.updatedAt = now();
+    await kv.set(`account:${userId}`, account);
+    await postLedger(userId, `admin_${operation}`, round(account.available - previous), account, note);
+    await audit(admin, `balance.${operation}`, userId, `${note} (${amount} TUSDT)`);
+    return c.json({ account });
+  } catch (reason) {
+    return error(c, reason);
+  }
+});
+
+app.post(`${PREFIX}/admin/users/:id/notes`, async (c) => {
+  try {
+    const admin = await requireAdmin(c, "users");
+    const input = await body(c);
+    const text = cleanText(input.text, 2000);
+    if (!text) throw new Error("Enter a note.");
+    const userId = c.req.param("id");
+    if (!await getProfile(userId)) throw new Error("The customer was not found.");
+    const createdAt = now();
+    const note = { id: id(), userId, text, adminId: admin.id, adminName: admin.fullName, createdAt };
+    await kv.set(`admin-note:${userId}:${createdAt}:${note.id}`, note);
+    await audit(admin, "user.note_added", userId, "Internal administrative note added.");
+    return c.json({ note }, 201);
+  } catch (reason) {
+    return error(c, reason);
+  }
+});
+
+app.post(`${PREFIX}/admin/profit-codes`, async (c) => {
+  try {
+    const admin = await requireAdmin(c, "profit_codes");
+    const input = await body(c);
+    const code = cleanText(input.code, 80).toUpperCase();
+    const kind = input.kind;
+    if (!/^[A-Z0-9-]{4,80}$/.test(code)) throw new Error("Enter a valid Profit Code.");
+    if (kind !== "fixed" && kind !== "percentage") throw new Error("Choose a valid distribution type.");
+    const value = finitePositive(input.value, "Value");
+    if (kind === "percentage" && value > 100) throw new Error("Percentage cannot exceed 100.");
+    if (await kv.get(`profit-code:${code}`)) throw new Error("This Profit Code already exists.");
+    const expiresAt = cleanText(input.expiresAt, 50) || null;
+    if (expiresAt && Number.isNaN(new Date(expiresAt).getTime())) throw new Error("Enter a valid expiry date.");
+    const profitCode = { code, kind, value, active: true, expiresAt, createdAt: now() };
+    await kv.set(`profit-code:${code}`, profitCode);
+    await audit(admin, "profit_code.created", code, `${kind} distribution of ${value}.`);
+    return c.json({ profitCode }, 201);
+  } catch (reason) {
+    return error(c, reason);
+  }
+});
+
+app.post(`${PREFIX}/admin/profit-codes/:code/status`, async (c) => {
+  try {
+    const admin = await requireAdmin(c, "profit_codes");
+    const input = await body(c);
+    if (typeof input.active !== "boolean") throw new Error("Choose an active status.");
+    const code = cleanText(c.req.param("code"), 80).toUpperCase();
+    const profitCode = await kv.get(`profit-code:${code}`);
+    if (!profitCode) throw new Error("The Profit Code was not found.");
+    profitCode.active = input.active;
+    await kv.set(`profit-code:${code}`, profitCode);
+    await audit(admin, `profit_code.${input.active ? "activated" : "revoked"}`, code, `Profit Code ${code} status changed.`);
+    return c.json({ profitCode });
+  } catch (reason) {
+    return error(c, reason);
+  }
+});
+
+app.post(`${PREFIX}/admin/admins`, async (c) => {
+  try {
+    const admin = await requireAdmin(c, "admins");
+    const input = await body(c);
+    const fullName = cleanText(input.fullName, 120);
+    const email = cleanText(input.email, 200).toLowerCase();
+    const password = String(input.password ?? "");
+    const permissions = Array.isArray(input.permissions)
+      ? input.permissions.filter((permission): permission is Permission =>
+        ADMIN_PERMISSIONS.includes(permission as Permission)
+      )
+      : [];
+    if (fullName.length < 2) throw new Error("Enter the administrator's full name.");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter a valid administrator email.");
+    if ((await allProfiles()).some((profile) => profile.role === "admin" && profile.email?.toLowerCase() === email)) {
+      throw new Error("An administrator already exists with this email.");
+    }
+    const profile: Profile = {
+      id: `admin-${id()}`,
+      fullName,
+      email,
+      phone: "",
+      referralCode: await createReferralCode(),
+      referredBy: admin.referralCode,
+      createdAt: now(),
+      kycStatus: "approved",
+      accountStatus: "active",
+      role: "admin",
+      permissions,
+      passwordHash: await hashPassword(password),
+    };
+    await kv.mset(
+      [`profile:${profile.id}`, `referral:${profile.referralCode}`],
+      [profile, profile.id],
+    );
+    await audit(admin, "admin.created", profile.id, `Administrator ${profile.email} created.`);
+    return c.json({ profile: publicProfile(profile) }, 201);
+  } catch (reason) {
+    return error(c, reason);
+  }
+});
+
+app.post(`${PREFIX}/admin/admins/:id`, async (c) => {
+  try {
+    const admin = await requireAdmin(c, "admins");
+    const adminId = c.req.param("id");
+    const target = await getProfile(adminId);
+    if (!target || target.role !== "admin") throw new Error("The administrator was not found.");
+    if (adminId === ROOT_ADMIN_ID || target.email?.toLowerCase() === ROOT_ADMIN_EMAIL) {
+      throw new Error("Root administrator access cannot be changed here.");
+    }
+    const input = await body(c);
+    if (input.status !== undefined) {
+      if (input.status !== "active" && input.status !== "revoked") throw new Error("Choose active or revoked.");
+      target.accountStatus = input.status;
+    }
+    if (input.permissions !== undefined) {
+      if (!Array.isArray(input.permissions)) throw new Error("Permissions must be a list.");
+      target.permissions = input.permissions.filter((permission): permission is Permission =>
+        ADMIN_PERMISSIONS.includes(permission as Permission)
+      );
+    }
+    if (input.password !== undefined) target.passwordHash = await hashPassword(String(input.password));
+    await kv.set(`profile:${target.id}`, target);
+    if (target.accountStatus !== "active" || input.password !== undefined) {
+      const sessions = await kv.getByPrefix("admin-session:") as AdminSession[];
+      await Promise.all(
+        sessions.filter((session) => session.adminId === target.id)
+          .map((session) => kv.del(`admin-session:${session.token}`)),
+      );
+    }
+    await audit(admin, "admin.updated", target.id, `Administrator ${target.email} updated; status ${target.accountStatus}.`);
+    return c.json({ profile: publicProfile(target) });
+  } catch (reason) {
+    return error(c, reason);
+  }
+});
+
+app.post(`${PREFIX}/admin/investments`, async (c) => {
+  try {
+    const admin = await requireAdmin(c, "investments");
+    const input = await body(c);
+    const userId = cleanText(input.userId, 100);
+    const amount = finitePositive(input.amount);
+    const market = cleanText(input.market, 150);
+    const profile = await getProfile(userId);
+    if (!profile || profile.role !== "user" || profile.accountStatus === "deleted") {
+      throw new Error("The customer was not found.");
+    }
+    const account = await getAccount(userId);
+    if (amount > account.available) throw new Error("The customer does not have enough available balance.");
+    account.available = round(account.available - amount);
+    account.invested = round(account.invested + amount);
+    account.updatedAt = now();
+    const investment = {
+      id: id(),
+      userId,
+      market,
+      principal: amount,
+      status: "open",
+      createdAt: now(),
+    };
+    await kv.mset([`account:${userId}`, `investment:${investment.id}`], [account, investment]);
+    await postLedger(userId, "investment_allocated", -amount, account, `Allocated to ${market}`);
+    await audit(admin, "investment.allocated", investment.id, `${amount} TUSDT allocated for ${profile.fullName}.`);
+    return c.json({ investment }, 201);
+  } catch (reason) {
+    return error(c, reason);
+  }
+});
+
+app.post(`${PREFIX}/admin/investments/:id/settle`, async (c) => {
+  try {
+    const admin = await requireAdmin(c, "investments");
+    const input = await body(c);
+    const profit = Number(input.profit);
+    if (!Number.isFinite(profit)) throw new Error("Enter a valid profit or loss.");
+    const investmentId = c.req.param("id");
+    const investment = await kv.get(`investment:${investmentId}`);
+    if (!investment) throw new Error("The investment was not found.");
+    if (investment.status !== "open") throw new Error("This investment has already been settled.");
+    if (profit < -investment.principal) throw new Error("A loss cannot exceed the investment principal.");
+    const account = await getAccount(investment.userId);
+    if (account.invested < investment.principal) throw new Error("The invested balance is inconsistent.");
+    account.invested = round(account.invested - investment.principal);
+    account.available = round(account.available + investment.principal + profit);
+    account.updatedAt = now();
+    investment.status = "settled";
+    investment.profit = round(profit);
+    investment.settledAt = now();
+    await kv.mset(
+      [`account:${investment.userId}`, `investment:${investment.id}`],
+      [account, investment],
+    );
+    await postLedger(
+      investment.userId,
+      "investment_settled",
+      round(investment.principal + profit),
+      account,
+      `${investment.market} settled; return ${round(profit)} TUSDT`,
+    );
+    await audit(admin, "investment.settled", investment.id, `Return ${round(profit)} TUSDT posted.`);
+    return c.json({ investment });
+  } catch (reason) {
+    return error(c, reason);
+  }
+});
+
+app.notFound((c) => c.json({ error: "Endpoint not found." }, 404));
 
 Deno.serve(app.fetch);

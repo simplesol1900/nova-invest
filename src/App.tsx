@@ -14,15 +14,15 @@ import { supabase } from "./lib/supabase";
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Screen =
   | "splash" | "onboarding" | "login" | "signup"
-  | "home" | "markets" | "trade" | "earn" | "profile"
+  | "home" | "markets" | "trade" | "profile"
   | "asset-detail" | "buy" | "sell" | "swap"
   | "wallet" | "deposit" | "withdraw" | "receive"
   | "transactions" | "invest" | "investment-plans"
-  | "staking" | "copy-trading" | "analytics"
+  | "staking" | "copy-trading"
   | "notifications" | "security" | "settings" | "kyc" | "help"
   | "tx-success" | "error" | "profit-code" | "referral" | "admin";
 
-type MainTab = "home" | "markets" | "trade" | "earn" | "profile";
+type MainTab = "home" | "markets" | "trade" | "profile";
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 const COINS = [
@@ -84,6 +84,11 @@ const DIAL_CODES=[
   {code:"+966",flag:"🇸🇦",name:"Saudi Arabia"},{code:"+62",flag:"🇮🇩",name:"Indonesia"},
   {code:"+63",flag:"🇵🇭",name:"Philippines"},{code:"+84",flag:"🇻🇳",name:"Vietnam"},
 ];
+
+function formatInternationalPhone(dialCode:string, localNumber:string) {
+  const nationalNumber=localNumber.replace(/\D/g,"").replace(/^0+/,"");
+  return `${dialCode}${nationalNumber}`;
+}
 
 // ─── Micro components ─────────────────────────────────────────────────────────
 function Sparkline({ data, color, w=80, h=32 }: { data:number[]; color:string; w?:number; h?:number }) {
@@ -175,9 +180,6 @@ const NAV_ITEMS = [
   },
   { id:"trade",   label:"Invest",
     icon:(a:boolean)=><svg viewBox="0 0 24 24" fill="none" stroke={a?"white":"#888"} strokeWidth="1.8" className="w-5 h-5"><path d="M7 16V4m0 0L3 8m4-4l4 4M17 8v12m0 0l4-4m-4 4l-4-4" strokeLinecap="round" strokeLinejoin="round"/></svg>
-  },
-  { id:"earn",    label:"Earn",
-    icon:(a:boolean)=><svg viewBox="0 0 24 24" fill="none" stroke={a?"white":"#888"} strokeWidth="1.8" className="w-5 h-5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2" strokeLinecap="round"/></svg>
   },
   { id:"profile", label:"My Account",
     icon:(a:boolean)=><svg viewBox="0 0 24 24" fill="none" stroke={a?"white":"#888"} strokeWidth="1.8" className="w-5 h-5"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" strokeLinecap="round"/></svg>
@@ -382,13 +384,11 @@ function SideMenu({ navigate, onClose, profile }: { navigate:(s:Screen)=>void; o
   const items=[
     {i:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-5 h-5"><path d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5z" strokeLinecap="round" strokeLinejoin="round"/><path d="M9 21V12h6v9" strokeLinecap="round"/></svg>,l:"Home",s:"home"},
     {i:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-5 h-5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12" strokeLinecap="round" strokeLinejoin="round"/></svg>,l:"Markets",s:"markets"},
-    {i:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-5 h-5"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-4 0v2M12 12v4M10 14h4" strokeLinecap="round"/></svg>,l:"Wallet",s:"wallet"},
     {i:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-5 h-5"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" strokeLinecap="round"/></svg>,l:"Investment Plans",s:"investment-plans"},
     {i:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-5 h-5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4" strokeLinecap="round"/></svg>,l:"Staking",s:"staking"},
     {i:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-5 h-5"><circle cx="12" cy="8" r="3"/><path d="M8 14c0-2.2 1.8-4 4-4s4 1.8 4 4" strokeLinecap="round"/><path d="M3 17c0-2.2 1.8-4 4-4M21 17c0-2.2-1.8-4-4-4" strokeLinecap="round"/></svg>,l:"Copy Trading",s:"copy-trading"},
     {i:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-5 h-5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2" strokeLinecap="round"/></svg>,l:"Profit Code",s:"profit-code"},
     {i:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-5 h-5"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M9 7h6M9 11h6M9 15h4" strokeLinecap="round"/></svg>,l:"Transactions",s:"transactions"},
-    {i:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-5 h-5"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,l:"Analytics",s:"analytics"},
     {i:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-5 h-5"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,l:"Settings",s:"settings"},
     {i:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-5 h-5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" strokeLinecap="round"/></svg>,l:"My Network",s:"referral"},
     {i:<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-5 h-5"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01" strokeLinecap="round"/></svg>,l:"Help & Support",s:"help"},
@@ -832,7 +832,7 @@ function WithdrawScreen({ navigate:_, goBack }: { navigate:(s:Screen)=>void; goB
   useEffect(()=>{getSandboxAccount().then(d=>setAvailable(d.account.available)).catch(()=>{});},[]);
   async function submit(){
     setLoading(true);setStatus("");
-    try{await createSandboxRequest({type:"withdrawal",amount:Number(amount),detail:wallet||"Sandbox Binance wallet"});setStatus("Test withdrawal request submitted for admin review.");setAmount("");}
+    try{await createSandboxRequest({type:"withdrawal",amount:Number(amount),detail:`Binance: ${wallet.trim()}`});setStatus("Test withdrawal request submitted for admin review.");setAmount("");setWallet("");}
     catch(e){setStatus(e instanceof Error?e.message:"Request failed.");}
     finally{setLoading(false);}
   }
@@ -845,11 +845,11 @@ function WithdrawScreen({ navigate:_, goBack }: { navigate:(s:Screen)=>void; goB
         <Card className="p-4">
           <label className="text-xs text-[#666] mb-2 block font-medium">Amount (TUSDT)</label>
           <div className="flex gap-2"><input value={amount} onChange={e=>setAmount(e.target.value.replace(/[^\d.]/g,""))} inputMode="decimal" placeholder="0.00" className="flex-1 min-w-0 bg-gray-50 border border-[#e5e7eb] rounded-xl px-4 py-3 text-lg font-mono outline-none focus:border-[#00c896]"/><button onClick={()=>setAmount(String(available))} className="px-3 rounded-xl bg-[#00c896]/10 text-[#00c896] text-xs font-bold">MAX</button></div>
-          <label className="text-xs text-[#666] mb-2 mt-4 block font-medium">Mock Binance wallet reference</label>
-          <input value={wallet} onChange={e=>setWallet(e.target.value)} placeholder="Sandbox address or account label" className="w-full bg-gray-50 border border-[#e5e7eb] rounded-xl px-4 py-3 text-sm outline-none focus:border-[#00c896]"/>
+          <label className="text-xs text-[#666] mb-2 mt-4 block font-medium">Binance UID or approved wallet reference</label>
+          <input value={wallet} onChange={e=>setWallet(e.target.value)} placeholder="Enter your Binance withdrawal reference" className="w-full bg-gray-50 border border-[#e5e7eb] rounded-xl px-4 py-3 text-sm outline-none focus:border-[#00c896]"/>
         </Card>
         {status&&<p className={`text-xs rounded-xl px-3 py-2 border ${status.includes("submitted")?"text-[#007b5d] bg-[#00c896]/10 border-[#00c896]/20":"text-red-600 bg-red-50 border-red-200"}`}>{status}</p>}
-        <GreenBtn label={loading?"Submitting…":"Submit Test Withdrawal"} onClick={submit} disabled={loading||!Number(amount)||Number(amount)>available}/>
+        <GreenBtn label={loading?"Submitting…":"Submit Test Withdrawal"} onClick={submit} disabled={loading||!Number(amount)||Number(amount)>available||!wallet.trim()}/>
       </div>
     </div>
   );
@@ -944,39 +944,6 @@ function TradeScreen({ navigate }: { navigate:(s:Screen)=>void }) {
   );
 }
 
-// ─── Earn ─────────────────────────────────────────────────────────────────────
-function EarnScreen({ navigate }: { navigate:(s:Screen)=>void }) {
-  return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <DarkHeader left={<div><h1 className="text-lg font-bold text-white">Earn</h1><p className="text-[10px] text-[#888]">Make your crypto work for you</p></div>}
-        title={<><p className="text-[#aaa] text-xs mb-0.5">Total Earned</p><p className="text-2xl font-bold text-white font-mono">$1,245.32</p><p className="text-[#00c896] text-xs font-mono">+12.6% (24h)</p></>}
-      />
-      <div className="flex-1 overflow-y-auto bg-[#f4f5f7] px-4 pt-4 pb-24">
-        <h2 className="text-sm font-bold text-[#111] mb-3">Opportunities</h2>
-        <Card className="overflow-hidden mb-4">
-          {[{n:"Flexible Savings",s:"Up to 12% APY",i:"💰",a:"12%",sc:"investment-plans"},{n:"Staking",s:"Up to 18% APY",i:"🔒",a:"18%",sc:"staking"},{n:"Referral Rewards",s:"Earn more together",i:"🎁",a:null,sc:"referral"}].map((e,i,arr)=>(
-            <button key={e.n} onClick={()=>{if(e.sc)navigate(e.sc as Screen);}} className={`w-full flex items-center gap-3 px-4 py-4 hover:bg-gray-50 transition-colors text-left ${i<arr.length-1?"border-b border-[#f0f0f0]":""}`}>
-              <span className="text-xl">{e.i}</span><div className="flex-1"><p className="text-sm font-semibold text-[#111]">{e.n}</p><p className="text-xs text-[#aaa]">{e.s}</p></div>
-              {e.a&&<span className="text-sm font-bold font-mono text-[#00c896]">{e.a}</span>}
-              <svg viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" className="w-4 h-4"><path d="M9 18l6-6-6-6" strokeLinecap="round"/></svg>
-            </button>
-          ))}
-        </Card>
-        <h2 className="text-sm font-bold text-[#111] mb-3">Staking Assets</h2>
-        <Card className="overflow-hidden">
-          {[{s:"SOL",n:"Solana",a:"7.8%",c:"#9945ff"},{s:"ETH",n:"Ethereum",a:"4.6%",c:"#627eea"},{s:"ADA",n:"Cardano",a:"3.9%",c:"#0033ad"},{s:"BNB",n:"BNB",a:"5.2%",c:"#f3ba2f"}].map((a,i,arr)=>(
-            <div key={a.s} className={`flex items-center gap-3 px-4 py-3 ${i<arr.length-1?"border-b border-[#f5f5f5]":""}`}>
-              <CoinIcon symbol={a.s} color={a.c}/><div className="flex-1"><p className="text-sm font-semibold text-[#111]">{a.n}</p><p className="text-xs text-[#aaa]">Flexible</p></div>
-              <span className="text-sm font-bold font-mono text-[#00c896]">{a.a}</span>
-            </div>
-          ))}
-        </Card>
-        <div className="mt-4"><GreenBtn label="Stake Now" onClick={()=>navigate("staking")}/></div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Staking ──────────────────────────────────────────────────────────────────
 function StakingScreen({ navigate, goBack }: { navigate:(s:Screen)=>void; goBack:()=>void }) {
   const [amt,setAmt]=useState("");
@@ -1018,38 +985,6 @@ function CopyTradingScreen({ navigate, goBack }: { navigate:(s:Screen)=>void; go
   );
 }
 
-// ─── Analytics ────────────────────────────────────────────────────────────────
-function AnalyticsScreen({ goBack }: { goBack:()=>void }) {
-  const total=PORTFOLIO.reduce((s,a)=>s+a.value,0);
-  const allocs=[52.4,18.7,12.3,16.6]; const colors=["#f7931a","#627eea","#9945ff","#aaa"]; const labels=["BTC","ETH","SOL","Others"];
-  return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <DarkHeader left={<><BackButton onBack={goBack} light/><div className="ml-1"><h1 className="text-base font-bold text-white">Portfolio Analytics</h1></div></>}
-        title={<><p className="text-[#aaa] text-xs">Demo Portfolio Value</p><p className="text-2xl font-bold text-white font-mono mt-0.5">${total.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</p><p className="text-amber-400 text-xs font-mono">Illustrative data only</p></>}
-      />
-      <div className="flex-1 overflow-y-auto bg-[#f4f5f7] px-4 pt-4 pb-4 flex flex-col gap-3">
-        <Card className="p-4"><Sparkline data={[18000,19500,19000,21000,20500,22000,total]} color="#00c896" w={320} h={80}/></Card>
-        <Card className="p-4">
-          <p className="text-sm font-bold text-[#111] mb-4">Allocation</p>
-          <div className="flex items-center gap-4">
-            <svg viewBox="0 0 80 80" className="w-24 h-24 flex-shrink-0">
-              {(()=>{let o=0;const r=28,ci=2*Math.PI*r;return allocs.map((a,i)=>{const d=(a/100)*ci;const el=<circle key={i} cx="40" cy="40" r={r} fill="none" stroke={colors[i]} strokeWidth="10" strokeDasharray={`${d} ${ci-d}`} strokeDashoffset={-o} style={{transform:"rotate(-90deg)",transformOrigin:"50% 50%"}}/>;o+=d;return el;})})()}
-              <text x="40" y="38" textAnchor="middle" fill="#888" fontSize="6">Total</text>
-              <text x="40" y="47" textAnchor="middle" fill="#111" fontSize="7" fontWeight="700">$35k</text>
-            </svg>
-            <div className="flex-1 space-y-2">{allocs.map((a,i)=><div key={i} className="flex items-center gap-2"><div className="w-2 h-2 rounded-full flex-shrink-0" style={{background:colors[i]}}/><span className="text-xs text-[#888] flex-1">{labels[i]}</span><span className="text-xs font-mono font-semibold text-[#111]">{a}%</span></div>)}</div>
-          </div>
-        </Card>
-        <div className="grid grid-cols-2 gap-3 pb-4">
-          {[["Total Return","+$4,823","#00c896"],["Win Rate","67%","#00c896"],["Open Positions","4","#111"],["Best Asset","BTC +24%","#f7931a"]].map(([k,v,c])=>(
-            <Card key={k} className="p-3"><p className="text-[10px] text-[#aaa]">{k}</p><p className="text-base font-bold font-mono mt-1" style={{color:c}}>{v}</p></Card>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Investment Plans ─────────────────────────────────────────────────────────
 function InvestmentPlansScreen({ navigate, goBack }: { navigate:(s:Screen)=>void; goBack:()=>void }) {
   const [sel,setSel]=useState("Balanced");
@@ -1082,7 +1017,7 @@ function InvestScreen({ navigate, goBack }: { navigate:(s:Screen)=>void; goBack:
       <DarkHeader left={<><BackButton onBack={goBack} light/><div className="ml-1"><h1 className="text-base font-bold text-white">Invest</h1><p className="text-[10px] text-[#888]">Grow your wealth with smart strategies</p></div></>}/>
       <div className="flex-1 overflow-y-auto bg-[#f4f5f7] px-4 pt-4 pb-8">
         <Card className="overflow-hidden mb-5">
-          {[{t:"Auto Invest",s:"Set it and grow",i:"⚡",a:"investment-plans"},{t:"Recurring Buy",s:"Build your position",i:"🔄",a:"buy"},{t:"Portfolio Builder",s:"Diversify with ease",i:"📊",a:"analytics"},{t:"Copy Trading",s:"Mirror expert strategies",i:"👥",a:"copy-trading"}].map((q,i,arr)=>(
+          {[{t:"Auto Invest",s:"Set it and grow",i:"⚡",a:"investment-plans"},{t:"Recurring Buy",s:"Build your position",i:"🔄",a:"buy"},{t:"Copy Trading",s:"Mirror expert strategies",i:"👥",a:"copy-trading"}].map((q,i,arr)=>(
             <button key={q.t} onClick={()=>navigate(q.a as Screen)} className={`w-full flex items-center gap-3 px-4 py-4 hover:bg-gray-50 transition-colors text-left ${i<arr.length-1?"border-b border-[#f0f0f0]":""}`}>
               <span className="text-xl w-7 text-center">{q.i}</span><div className="flex-1"><p className="text-sm font-semibold text-[#111]">{q.t}</p><p className="text-xs text-[#aaa]">{q.s}</p></div>
               <svg viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" className="w-4 h-4"><path d="M9 18l6-6-6-6" strokeLinecap="round"/></svg>
@@ -1101,8 +1036,7 @@ function ProfileScreen({ navigate, logout, profile }: { navigate:(s:Screen)=>voi
   useEffect(()=>{if(profile)getSandboxAccount().then(d=>setSandboxAccount(d.account)).catch(()=>{});},[profile]);
   const profileItems=[
     ...(profile?.role==="admin"?[{l:"Sandbox Admin",s:"admin"}]:[]),
-    {l:"My Network (Referrals)",s:"referral"},{l:"Portfolio Analytics",s:"analytics"},
-    {l:"Wallet",s:"wallet"},{l:"Transaction History",s:"transactions"},
+    {l:"Transaction History",s:"transactions"},
     {l:"KYC Verification",s:"kyc"},{l:"Security / 2FA",s:"security"},
     {l:"Notifications",s:"notifications"},{l:"Help & Support",s:"help"},
   ];
@@ -1135,19 +1069,17 @@ function ProfileScreen({ navigate, logout, profile }: { navigate:(s:Screen)=>voi
 
 // ─── Notifications ────────────────────────────────────────────────────────────
 function NotificationsScreen({ goBack }: { goBack:()=>void }) {
-  const items=[{i:"📈",t:"BTC price is up 2.4%",s:"BTC is now $68,421.32",time:"2h ago",c:"#00c896"},{i:"⭐",t:"New staking rewards",s:"You earned 0.0123 SOL",time:"1h ago",c:"#9945ff"},{i:"✅",t:"Deposit confirmed",s:"+0.5 BTC received",time:"3h ago",c:"#00c896"},{i:"⚠️",t:"Price alert",s:"ETH reached $3,200",time:"5h ago",c:"#f5a623"},{i:"🔐",t:"KYC verified",s:"Your identity has been verified",time:"1d ago",c:"#627eea"}];
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <DarkHeader left={<><BackButton onBack={goBack} light/><h1 className="text-base font-bold text-white ml-2">Notifications</h1></>}/>
       <div className="flex-1 overflow-y-auto bg-[#f4f5f7]">
         <div className="flex gap-2 px-4 pt-3 pb-2 bg-white border-b border-[#f0f0f0]">{["All","Price Alerts","System"].map((t,i)=><Chip key={t} label={t} active={i===0}/>)}</div>
-        <div className="bg-white pb-24">
-          {items.map((n,i)=>(
-            <div key={i} className={`flex items-start gap-3 px-4 py-4 ${i<items.length-1?"border-b border-[#f5f5f5]":""}`}>
-              <div className="w-9 h-9 rounded-full flex items-center justify-center text-base flex-shrink-0 mt-0.5" style={{background:n.c+"15"}}>{n.i}</div>
-              <div className="flex-1"><p className="text-sm font-semibold text-[#111]">{n.t}</p><p className="text-xs text-[#888] mt-0.5">{n.s}</p><p className="text-[10px] text-[#bbb] mt-0.5">{n.time}</p></div>
-            </div>
-          ))}
+        <div className="bg-white flex-1 flex flex-col items-center justify-center py-20 px-8">
+          <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center mb-4">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#bbb" strokeWidth="1.5" className="w-7 h-7"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0" strokeLinecap="round"/></svg>
+          </div>
+          <p className="text-sm font-semibold text-[#333] mb-1">No notifications yet</p>
+          <p className="text-xs text-[#aaa] text-center leading-relaxed">You'll be notified here about deposits, withdrawals, KYC updates, and important account activity.</p>
         </div>
       </div>
     </div>
@@ -1252,7 +1184,7 @@ function CountrySelect({ label, required=true, value:ext, onChange:extOnChange }
 
 // ─── Phone Input with Dial Code ───────────────────────────────────────────────
 function PhoneInput({ label="Mobile Number", required=true, onChange }: { label?:string; required?:boolean; onChange?:(v:string)=>void }) {
-  const [dial,setDial]=useState("+91");
+  const [dial,setDial]=useState("+234");
   const [num,setNum]=useState("");
   const [open,setOpen]=useState(false);
   const ref=useRef<HTMLDivElement>(null);
@@ -1267,9 +1199,9 @@ function PhoneInput({ label="Mobile Number", required=true, onChange }: { label?
   function updateNum(v:string){
     const n=v.replace(/\D/g,"").slice(0,15);
     setNum(n);
-    if(onChange) onChange(`${dial} ${n}`);
+    if(onChange) onChange(formatInternationalPhone(dial,n));
   }
-  function pickDial(c:string){ setDial(c); setOpen(false); if(onChange) onChange(`${c} ${num}`); }
+  function pickDial(c:string){ setDial(c); setOpen(false); if(onChange) onChange(formatInternationalPhone(c,num)); }
 
   return (
     <div ref={ref}>
@@ -1437,277 +1369,118 @@ function CameraModule({ onCapture }: { onCapture:(img:string)=>void }) {
 
 // ─── KYC ─────────────────────────────────────────────────────────────────────
 function KYCScreen({ navigate, goBack }: { navigate:(s:Screen)=>void; goBack:()=>void }) {
-  const [step,setStep]=useState(0);
-  const [done,setDone]=useState([false,false,false]);
+  const [submitted,setSubmitted]=useState(false);
   const [selfieImg,setSelfieImg]=useState<string|null>(null);
   const [docType,setDocType]=useState("");
-  const [nationality,setNationality]=useState("");
   const [fullName,setFullName]=useState("");
-  const [dob,setDob]=useState("");
-  const [phone,setPhone]=useState("");
-  const [languages,setLanguages]=useState("");
-  const [relationship,setRelationship]=useState("Friend");
   const [gender,setGender]=useState("");
-  const [address,setAddress]=useState("");
-  const [city,setCity]=useState("");
-  const [region,setRegion]=useState("");
-  const [postalCode,setPostalCode]=useState("");
-  const [country,setCountry]=useState("");
   const [documentNumber,setDocumentNumber]=useState("");
-  const [issueDate,setIssueDate]=useState("");
-  const [expiryDate,setExpiryDate]=useState("");
-  const [issuingCountry,setIssuingCountry]=useState("");
   const [documentFront,setDocumentFront]=useState<KycFile|null>(null);
-  const [documentBack,setDocumentBack]=useState<KycFile|null>(null);
   const [submitting,setSubmitting]=useState(false);
   const [submissionError,setSubmissionError]=useState("");
-  const ACCOUNT_ID="NI-847290";
-  const REFERRER_CODE="NI-A8M2K9";
 
-  const isIndian=nationality==="India";
-  const docTypes=isIndian
-    ?["Aadhaar Card","Passport","Driver's Licence","Voter's ID"]
-    :["National ID","Passport","Driver's Licence","Voter's Card"];
+  const DOC_TYPES=["National ID","Passport","Driver's Licence","Voter's Card","Aadhaar Card"];
 
-  function completeStep(i:number){ setDone(d=>{const n=[...d];n[i]=true;return n;}); setStep(0); }
+  const canSubmit=fullName.trim()&&gender&&docType&&documentNumber.trim()&&documentFront&&selfieImg;
+
   async function submitKycApplication(){
-    if(!selfieImg||!documentFront)return;
+    if(!canSubmit)return;
     setSubmitting(true);setSubmissionError("");
     try{
       await submitKyc({
-        fullName,dateOfBirth:dob,nationality,phone,gender,
-        address:[address,city,region,postalCode,country].filter(Boolean).join(", "),
-        documentType:docType,documentNumber,issueDate,expiryDate,issuingCountry,
-        documents:[documentFront,documentBack].filter((file):file is KycFile=>Boolean(file)),
-        selfie:{name:"selfie.jpg",dataUrl:selfieImg},
+        fullName,dateOfBirth:"",nationality:"",phone:"",gender,
+        address:"",
+        documentType:docType,documentNumber,issueDate:"",expiryDate:"",issuingCountry:"",
+        documents:[documentFront].filter((file):file is KycFile=>Boolean(file)),
+        selfie:{name:"selfie.jpg",dataUrl:selfieImg!},
       });
-      setStep(4);
+      setSubmitted(true);
     }catch(error){setSubmissionError(error instanceof Error?error.message:"KYC submission failed.");}
     finally{setSubmitting(false);}
   }
 
-  function calcAge(d:string):string {
-    if(!d) return "—";
-    const age=Math.floor((Date.now()-new Date(d).getTime())/(365.25*24*3600*1000));
-    return isNaN(age)||age<0?"—":String(age);
-  }
-
-  const Field=({label,placeholder,type="text",required=true,value,onChange}:{label:string;placeholder:string;type?:string;required?:boolean;value?:string;onChange?:(v:string)=>void})=>(
-    <div>
-      <label className="text-xs text-[#666] mb-1.5 block font-medium">{label}{required&&<span className="text-red-500 ml-0.5">*</span>}</label>
-      <input type={type} placeholder={placeholder} value={value} onChange={onChange?e=>onChange(e.target.value):undefined}
-        className="w-full bg-white border border-[#e5e7eb] rounded-xl px-4 py-3 text-sm text-[#111] placeholder-[#bbb] outline-none focus:border-[#00c896]"/>
-    </div>
-  );
-
-  const STEPS=[{l:"Personal Information",icon:"👤"},{l:"Identity Document",icon:"🪪"},{l:"Selfie Verification",icon:"🤳"}];
-
-  // ── Hub ──
-  if(step===0) return (
+  if(submitted) return (
     <div className="flex flex-col h-full overflow-hidden">
-      <DarkHeader left={<><BackButton onBack={goBack} light/><div className="ml-1"><h1 className="text-base font-bold text-white">KYC Verification</h1></div></>}/>
-      <div className="flex-1 overflow-y-auto bg-[#f4f5f7] px-4 pt-4 pb-8 flex flex-col gap-4">
-        <p className="text-xs text-[#888]">Complete all three steps to verify your identity and unlock full account features.</p>
-        <div className="flex gap-1.5 mb-1">
-          {[0,1,2].map(i=><div key={i} className={`h-1.5 flex-1 rounded-full transition-all ${done[i]?"bg-[#00c896]":"bg-[#e5e7eb]"}`}/>)}
+      <DarkHeader left={<><BackButton onBack={goBack} light/><div className="ml-2"><h1 className="text-base font-bold text-white">KYC Submitted</h1></div></>}/>
+      <div className="flex-1 overflow-y-auto bg-[#f4f5f7] px-4 pt-6 pb-8 flex flex-col gap-4">
+        <div className="bg-green-50 border border-green-200 rounded-2xl p-5 flex items-center gap-3">
+          <div className="w-11 h-11 rounded-full bg-green-100 border border-green-300 flex items-center justify-center flex-shrink-0">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5" className="w-5 h-5"><path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          </div>
+          <div>
+            <p className="text-sm font-bold text-green-800">Verification Submitted!</p>
+            <p className="text-xs text-green-600 mt-0.5">Your details are under review. You will be notified once approved.</p>
+          </div>
         </div>
-        {STEPS.map((s,i)=>{
-          const isDone=done[i]; const isLocked=i>0&&!done[i-1];
-          return (
-            <button key={i} onClick={()=>!isLocked&&setStep(i+1)} disabled={isLocked}
-              className={`w-full text-left rounded-2xl border-2 p-4 transition-all ${isDone?"border-[#00c896]/40 bg-white":isLocked?"border-[#f0f0f0] bg-[#fafafa] opacity-50":"border-amber-200 bg-white"}`}>
-              <div className="flex items-center gap-4">
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg flex-shrink-0 ${isDone?"bg-[#00c896]":"bg-gray-100"}`}>
-                  {isDone?<svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" className="w-5 h-5"><path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round"/></svg>:s.icon}
-                </div>
-                <div className="flex-1">
-                  <p className="text-sm font-bold text-[#111]">Step {i+1}: {s.l}</p>
-                  <p className={`text-xs font-semibold mt-0.5 ${isDone?"text-[#00c896]":isLocked?"text-[#bbb]":"text-amber-500"}`}>
-                    {isDone?"Completed ✓":isLocked?"Locked — complete previous step":"Tap to fill in"}
-                  </p>
-                </div>
-                {!isLocked&&<svg viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="2" className="w-5 h-5 flex-shrink-0"><path d="M9 18l6-6-6-6" strokeLinecap="round"/></svg>}
-              </div>
-              {!isDone&&!isLocked&&(
-                <p className="text-xs text-[#aaa] mt-2 ml-14 leading-relaxed">
-                  {i===0&&"Full name, date of birth, mobile number and residential address."}
-                  {i===1&&"Government-issued photo ID — Aadhaar, Passport, or Driver's Licence."}
-                  {i===2&&"Live selfie to confirm you are the account holder."}
-                </p>
-              )}
-            </button>
-          );
-        })}
-        {submissionError&&<p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">{submissionError}</p>}
-        <GreenBtn label={submitting?"Submitting securely…":done.every(Boolean)?"Submit KYC →":"Complete All Steps to Continue"} disabled={!done.every(Boolean)||submitting||!documentFront||!selfieImg} onClick={submitKycApplication}/>
+        <Card className="p-4 flex flex-col gap-3">
+          {[["Name",fullName],["Gender",gender],["Document",docType],["ID Number",documentNumber]].map(([k,v])=>(
+            <div key={k} className="flex items-center gap-3 border-b border-[#f0f0f0] pb-2 last:border-0 last:pb-0">
+              <span className="text-xs text-[#888] w-24 flex-shrink-0">{k}:</span>
+              <span className="text-xs font-semibold text-[#111] flex-1">{v||"—"}</span>
+            </div>
+          ))}
+        </Card>
+        <OutlineBtn label="Back to Dashboard" onClick={()=>navigate("home")}/>
       </div>
     </div>
   );
 
-  // ── Step 1: Personal Information ──
-  if(step===1) return (
+  return (
     <div className="flex flex-col h-full overflow-hidden">
-      <DarkHeader left={<><BackButton onBack={()=>setStep(0)} light/><div className="ml-2"><h1 className="text-base font-bold text-white">Personal Information</h1><p className="text-[10px] text-[#888]">Step 1 of 3</p></div></>}/>
+      <DarkHeader left={<><BackButton onBack={goBack} light/><div className="ml-1"><h1 className="text-base font-bold text-white">KYC Verification</h1><p className="text-[10px] text-[#888]">Personal Information</p></div></>}/>
       <div className="flex-1 overflow-y-auto bg-[#f4f5f7] px-4 pt-4 pb-8 flex flex-col gap-4">
+
+        {/* Personal details */}
         <Card className="p-4 flex flex-col gap-4">
-          <Field label="Legal Full Name" placeholder="As it appears on your ID" value={fullName} onChange={setFullName}/>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Date of Birth" placeholder="DD/MM/YYYY" type="date" value={dob} onChange={setDob}/>
-            <div>
-              <label className="text-xs text-[#666] mb-1.5 block font-medium">Gender<span className="text-red-500 ml-0.5">*</span></label>
-              <select value={gender} onChange={e=>setGender(e.target.value)} className="w-full bg-white border border-[#e5e7eb] rounded-xl px-4 py-3 text-sm text-[#111] outline-none focus:border-[#00c896]">
-                <option value="">Select</option><option>Male</option><option>Female</option><option>Other</option>
-              </select>
-            </div>
-          </div>
-          <CountrySelect label="Nationality" value={nationality} onChange={setNationality}/>
-          <PhoneInput label="Mobile Number" onChange={setPhone}/>
+          <p className="text-xs font-bold text-[#111]">Personal Details</p>
           <div>
-            <label className="text-xs text-[#666] mb-1.5 block font-medium">Languages Proficient<span className="text-red-500 ml-0.5">*</span></label>
-            <input value={languages} onChange={e=>setLanguages(e.target.value)} placeholder="e.g. English, Hindi, Telugu"
+            <label className="text-xs text-[#666] mb-1.5 block font-medium">Full Name<span className="text-red-500 ml-0.5">*</span></label>
+            <input value={fullName} onChange={e=>setFullName(e.target.value)} placeholder="As it appears on your ID"
               className="w-full bg-white border border-[#e5e7eb] rounded-xl px-4 py-3 text-sm text-[#111] placeholder-[#bbb] outline-none focus:border-[#00c896]"/>
           </div>
           <div>
-            <label className="text-xs text-[#666] mb-1.5 block font-medium">Relationship with Referrer<span className="text-red-500 ml-0.5">*</span></label>
-            <select value={relationship} onChange={e=>setRelationship(e.target.value)}
-              className="w-full bg-white border border-[#e5e7eb] rounded-xl px-4 py-3 text-sm text-[#111] outline-none focus:border-[#00c896]">
-              {["Friend","Family","Colleague","Business Partner","Online Contact","Other"].map(r=><option key={r}>{r}</option>)}
-            </select>
+            <label className="text-xs text-[#666] mb-1.5 block font-medium">Gender<span className="text-red-500 ml-0.5">*</span></label>
+            <div className="flex gap-2">
+              {["Male","Female","Other"].map(g=>(
+                <button key={g} onClick={()=>setGender(g)}
+                  className={`flex-1 py-2.5 rounded-xl text-xs font-semibold border transition-colors ${gender===g?"bg-[#111] text-white border-[#111]":"bg-white text-[#666] border-[#e5e7eb]"}`}>{g}</button>
+              ))}
+            </div>
           </div>
         </Card>
-        <Card className="p-4 flex flex-col gap-4">
-          <p className="text-xs font-bold text-[#111]">Residential Address</p>
-          <Field label="Street Address" placeholder="House number, street name" value={address} onChange={setAddress}/>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="City / Town" placeholder="City" value={city} onChange={setCity}/>
-            <Field label="State / Province" placeholder="State" value={region} onChange={setRegion}/>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Postal Code" placeholder="ZIP / Postal code" required={false} value={postalCode} onChange={setPostalCode}/>
-            <CountrySelect label="Country" value={country} onChange={setCountry}/>
-          </div>
-        </Card>
-        <GreenBtn label="Save & Continue →" onClick={()=>completeStep(0)}/>
-      </div>
-    </div>
-  );
 
-  // ── Step 2: Identity Document ──
-  if(step===2) return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <DarkHeader left={<><BackButton onBack={()=>setStep(0)} light/><div className="ml-2"><h1 className="text-base font-bold text-white">Identity Document</h1><p className="text-[10px] text-[#888]">Step 2 of 3</p></div></>}/>
-      <div className="flex-1 overflow-y-auto bg-[#f4f5f7] px-4 pt-4 pb-8 flex flex-col gap-4">
+        {/* ID Document */}
         <Card className="p-4 flex flex-col gap-4">
+          <p className="text-xs font-bold text-[#111]">Identity Document</p>
           <div>
             <label className="text-xs text-[#666] mb-1.5 block font-medium">Document Type<span className="text-red-500 ml-0.5">*</span></label>
-            {isIndian&&<p className="text-[10px] text-[#00c896] mb-2 font-medium">🇮🇳 Indian residents — Aadhaar Card, Passport or Voter's ID accepted</p>}
             <div className="flex gap-2 flex-wrap">
-              {docTypes.map(t=>(
+              {DOC_TYPES.map(t=>(
                 <button key={t} onClick={()=>setDocType(t)}
                   className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-colors ${docType===t?"bg-[#111] text-white border-[#111]":"bg-white text-[#666] border-[#e5e7eb]"}`}>{t}</button>
               ))}
             </div>
           </div>
-          <Field label="Document Number" placeholder={isIndian&&docType==="Aadhaar Card"?"12-digit Aadhaar number":"Enter document number"} value={documentNumber} onChange={setDocumentNumber}/>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Issue Date" placeholder="DD/MM/YYYY" type="date" value={issueDate} onChange={setIssueDate}/>
-            <Field label="Expiry Date" placeholder="DD/MM/YYYY" type="date" required={docType==="Aadhaar Card"?false:true} value={expiryDate} onChange={setExpiryDate}/>
-          </div>
-          <CountrySelect label="Issuing Country" value={issuingCountry} onChange={setIssuingCountry}/>
-        </Card>
-        <Card className="p-4 flex flex-col gap-4">
-          <p className="text-xs font-bold text-[#111]">Upload Document Photos</p>
-          <p className="text-xs text-[#888]">Clear photos with all four corners visible and text legible. Max 5 MB each.</p>
-          <UploadZone label="Front of Document" onFile={setDocumentFront}/>
-          {docType!=="Passport"&&<UploadZone label="Back of Document" onFile={setDocumentBack}/>}
-        </Card>
-        <div className="bg-blue-50 border border-blue-100 rounded-2xl p-3 flex gap-2">
-          <span className="flex-shrink-0">ℹ️</span>
-          <p className="text-xs text-blue-700 leading-relaxed">Document must not be expired, cropped, or edited. Your photo and all printed details must be clearly visible.</p>
-        </div>
-        <GreenBtn label="Save & Continue →" onClick={()=>completeStep(1)}/>
-      </div>
-    </div>
-  );
-
-  // ── Step 3: Selfie Verification ──
-  if(step===3) return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <DarkHeader left={<><BackButton onBack={()=>setStep(0)} light/><div className="ml-2"><h1 className="text-base font-bold text-white">Selfie Verification</h1><p className="text-[10px] text-[#888]">Step 3 of 3</p></div></>}/>
-      <div className="flex-1 overflow-y-auto bg-[#f4f5f7] px-4 pt-4 pb-8 flex flex-col gap-4">
-        <Card className="p-4">
-          <p className="text-sm font-bold text-[#111] mb-1">Take a Clear Selfie</p>
-          <p className="text-xs text-[#888] leading-relaxed mb-4">Your selfie confirms you are the real owner of the submitted identity document.</p>
-          <CameraModule onCapture={img=>{setSelfieImg(img);}}/>
-        </Card>
-        <Card className="p-4">
-          <p className="text-xs font-bold text-[#111] mb-3">Tips for a good selfie</p>
-          <div className="flex flex-col gap-2.5">
-            {[["✅","Face centred and fully visible"],["✅","Good even lighting, no backlight"],["✅","No glasses, hats or face coverings"],["✅","Neutral expression, both eyes open"],["❌","No filters or edited photos"]].map(([icon,tip])=>(
-              <div key={tip} className="flex items-start gap-2">
-                <span className="text-sm flex-shrink-0">{icon}</span>
-                <p className="text-xs text-[#555] leading-relaxed">{tip}</p>
-              </div>
-            ))}
-          </div>
-        </Card>
-        <GreenBtn label="Submit Selfie & Finish" disabled={!selfieImg} onClick={()=>completeStep(2)}/>
-      </div>
-    </div>
-  );
-
-  // ── Step 4: Submission Summary ──
-  const summaryLines=[
-    `Name: ${fullName||"—"}`,
-    `Mobile: ${phone||"—"}`,
-    `Country: ${nationality||"—"}`,
-    `Account ID: ${ACCOUNT_ID}`,
-    `Languages: ${languages||"—"}`,
-    `Age: ${calcAge(dob)}`,
-    `Ref ID: ${REFERRER_CODE}`,
-    `Relationship: ${relationship}`,
-  ];
-  function copyAndShare(){
-    const txt=summaryLines.join("\n");
-    navigator.clipboard?.writeText(txt).catch(()=>{});
-    if(navigator.share) navigator.share({title:"NOVA INVEST Registration",text:txt}).catch(()=>{});
-  }
-  return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <DarkHeader left={<><BackButton onBack={()=>setStep(0)} light/><div className="ml-2"><h1 className="text-base font-bold text-white">Registration Complete</h1></div></>}/>
-      <div className="flex-1 overflow-y-auto bg-[#f4f5f7] px-4 pt-4 pb-8 flex flex-col gap-4">
-        <div className="bg-green-50 border border-green-200 rounded-2xl p-4 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-green-100 border border-green-300 flex items-center justify-center flex-shrink-0">
-            <svg viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5" className="w-5 h-5"><path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+          <div>
+            <label className="text-xs text-[#666] mb-1.5 block font-medium">ID Number<span className="text-red-500 ml-0.5">*</span></label>
+            <input value={documentNumber} onChange={e=>setDocumentNumber(e.target.value)} placeholder="Enter your document number"
+              className="w-full bg-white border border-[#e5e7eb] rounded-xl px-4 py-3 text-sm text-[#111] placeholder-[#bbb] outline-none focus:border-[#00c896]"/>
           </div>
           <div>
-            <p className="text-sm font-bold text-green-800">KYC Submitted!</p>
-            <p className="text-xs text-green-600 mt-0.5">Your details are under review. You will be notified once approved.</p>
-          </div>
-        </div>
-        <Card className="p-4">
-          <p className="text-sm font-bold text-[#111] mb-1">Your Registration Details</p>
-          <p className="text-[10px] text-[#aaa] mb-4">Share with your account manager if requested.</p>
-          <div className="bg-gray-50 rounded-xl border border-[#ebebeb] overflow-hidden">
-            {[
-              ["Name",       fullName||"—"],
-              ["Mobile",     phone||"—"],
-              ["Country",    nationality||"—"],
-              ["Account ID", ACCOUNT_ID],
-              ["Languages",  languages||"—"],
-              ["Age",        calcAge(dob)],
-              ["Ref ID",     REFERRER_CODE],
-              ["Relationship",relationship],
-            ].map(([k,v],i,arr)=>(
-              <div key={k} className={`flex items-start gap-3 px-4 py-3 ${i<arr.length-1?"border-b border-[#ebebeb]":""}`}>
-                <span className="text-xs text-[#888] w-24 flex-shrink-0 pt-0.5">{k}:</span>
-                <span className="text-xs font-semibold text-[#111] flex-1 break-all">{v}</span>
-              </div>
-            ))}
+            <label className="text-xs text-[#666] mb-1.5 block font-medium">ID Photo<span className="text-red-500 ml-0.5">*</span></label>
+            <UploadZone label="Upload ID / Document Photo" onFile={setDocumentFront}/>
           </div>
         </Card>
-        <GreenBtn label="📋 Copy & Share Details" onClick={copyAndShare}/>
-        <OutlineBtn label="Go to Dashboard" onClick={()=>navigate("home")}/>
+
+        {/* Selfie */}
+        <Card className="p-4 flex flex-col gap-3">
+          <p className="text-xs font-bold text-[#111]">Selfie</p>
+          <p className="text-xs text-[#888] leading-relaxed">Take a clear selfie to confirm you are the real owner of the submitted document.</p>
+          <CameraModule onCapture={img=>{setSelfieImg(img);}}/>
+        </Card>
+
+        {submissionError&&<p className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">{submissionError}</p>}
+        <GreenBtn label={submitting?"Submitting…":"Submit KYC →"} disabled={!canSubmit||submitting} onClick={submitKycApplication}/>
       </div>
     </div>
   );
@@ -2128,7 +1901,7 @@ function ErrorScreen({ navigate }: { navigate:(s:Screen)=>void }) {
 
 // ─── Root ─────────────────────────────────────────────────────────────────────
 type AppState = { screen:Screen; mainTab:MainTab; stack:Screen[] };
-const MAIN:Screen[]=["home","markets","trade","earn","profile"];
+const MAIN:Screen[]=["home","markets","trade","profile"];
 
 export default function App() {
   const [state,setState]=useState<AppState>({screen:"splash",mainTab:"home",stack:[]});
@@ -2189,7 +1962,6 @@ export default function App() {
         {state.screen==="home"             &&<HomeScreen navigate={navigate} showDeposit={showDeposit} profile={profile}/>}
         {state.screen==="markets"          &&<MarketsScreen navigate={navigate}/>}
         {state.screen==="trade"            &&<TradeScreen navigate={navigate}/>}
-        {state.screen==="earn"             &&<EarnScreen navigate={navigate}/>}
         {state.screen==="profile"          &&<ProfileScreen navigate={navigate} logout={logout} profile={profile}/>}
         {state.screen==="asset-detail"     &&<AssetDetailScreen navigate={navigate} goBack={goBack}/>}
         {state.screen==="buy"              &&<BuyScreen navigate={navigate} goBack={goBack}/>}
@@ -2204,7 +1976,6 @@ export default function App() {
         {state.screen==="investment-plans" &&<InvestmentPlansScreen navigate={navigate} goBack={goBack}/>}
         {state.screen==="staking"          &&<StakingScreen navigate={navigate} goBack={goBack}/>}
         {state.screen==="copy-trading"     &&<CopyTradingScreen navigate={navigate} goBack={goBack}/>}
-        {state.screen==="analytics"        &&<AnalyticsScreen goBack={goBack}/>}
         {state.screen==="notifications"    &&<NotificationsScreen goBack={goBack}/>}
         {state.screen==="security"         &&<SecurityScreen goBack={goBack}/>}
         {state.screen==="settings"         &&<SettingsScreen goBack={goBack} navigate={navigate}/>}

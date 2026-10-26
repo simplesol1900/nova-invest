@@ -125,21 +125,37 @@ async function request<T>(
     : null;
   let response: Response;
   try {
+    const headers: Record<string, string> = {
+      apikey: publicAnonKey,
+      Authorization: `Bearer ${adminToken ?? session?.access_token ?? publicAnonKey}`,
+      ...(init.headers as Record<string, string> | undefined),
+    };
+    if (init.body) headers["Content-Type"] = "application/json";
     response = await fetch(`${baseUrl}${path}`, {
       ...init,
-      headers: {
-        "Content-Type": "application/json",
-        apikey: publicAnonKey,
-        Authorization: `Bearer ${adminToken ?? session?.access_token ?? publicAnonKey}`,
-        ...init.headers,
-      },
+      headers,
     });
   } catch {
     throw new Error("The server could not be reached. Check your connection and try again.");
   }
-  const data = await response.json().catch(() => ({}));
+  const responseText = await response.text();
+  let data: Record<string, unknown> = {};
+  try {
+    data = responseText ? JSON.parse(responseText) : {};
+  } catch {
+    data = {};
+  }
   if (!response.ok) {
-    throw new Error(data.error || "The request could not be completed.");
+    const serverMessage = typeof data.error === "string" ? data.error : responseText.trim();
+    if (
+      response.status === 401 &&
+      authenticated === "admin" &&
+      path !== "/admin/login"
+    ) {
+      window.localStorage.removeItem(adminSessionKey);
+      window.location.reload();
+    }
+    throw new Error(serverMessage || `The request could not be completed (HTTP ${response.status}).`);
   }
   return data as T;
 }
@@ -258,7 +274,7 @@ export async function getProfitCodeHistory() {
 }
 
 export async function getAdminOverview() {
-  return request<{
+  const data = await request<Partial<{
     profiles: UserProfile[];
     requests: SandboxRequest[];
     investments: SandboxInvestment[];
@@ -266,7 +282,16 @@ export async function getAdminOverview() {
     audits: AdminAudit[];
     notes: AdminNote[];
     kycs: KycSubmission[];
-  }>("/admin/overview", {}, "admin");
+  }>>("/admin/overview", {}, "admin");
+  return {
+    profiles: Array.isArray(data.profiles) ? data.profiles : [],
+    requests: Array.isArray(data.requests) ? data.requests : [],
+    investments: Array.isArray(data.investments) ? data.investments : [],
+    profitCodes: Array.isArray(data.profitCodes) ? data.profitCodes : [],
+    audits: Array.isArray(data.audits) ? data.audits : [],
+    notes: Array.isArray(data.notes) ? data.notes : [],
+    kycs: Array.isArray(data.kycs) ? data.kycs : [],
+  };
 }
 
 export async function reviewSandboxRequest(id: string, decision: "approved" | "rejected") {

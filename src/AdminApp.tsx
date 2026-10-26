@@ -125,7 +125,7 @@ function Login({ onAuthenticated }: { onAuthenticated: (profile: UserProfile) =>
     setError("");
     try {
       const normalizedEmail = normalizeEmail(email);
-      await bootstrapAdmin();
+      await bootstrapAdmin().catch(() => undefined);
       const profile = await loginAdmin(normalizedEmail, password);
       onAuthenticated(profile);
     } catch (reason) {
@@ -304,7 +304,12 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
     .filter((item) => item.userId === selectedUserId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
-  const can = (permission: AdminPermission) => profile.permissions?.includes("*") || profile.permissions?.includes(permission);
+  const isRootProfile =
+    profile.id === "admin-root" || profile.email?.toLowerCase() === ADMIN_EMAIL;
+  const can = (permission: AdminPermission) =>
+    isRootProfile || profile.permissions?.includes("*") || profile.permissions?.includes(permission);
+  const isRootAdmin = (item: UserProfile) =>
+    item.id === "admin-root" || item.email?.toLowerCase() === ADMIN_EMAIL;
   const allNavigation: Array<{ id: View; label: string; icon: IconName; count?: number; permission?: AdminPermission }> = [
     { id: "overview", label: "Overview", icon: "dashboard" },
     { id: "requests", label: "Requests", icon: "wallet", count: pendingRequests.length, permission: "funding" },
@@ -582,8 +587,8 @@ function AdminDashboard({ profile }: { profile: UserProfile }) {
                 {administratorProfiles.map((item) => (
                   <div key={item.id} className="border-b border-slate-100 px-5 py-4 last:border-0">
                     <div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-950 text-xs font-black text-emerald-400">{item.fullName.slice(0, 2).toUpperCase()}</div><div className="min-w-0 flex-1"><p className="truncate text-sm font-extrabold">{item.fullName}</p><p className="truncate text-xs text-slate-400">{item.email}</p></div><StatusBadge status={item.accountStatus} /></div>
-                    <div className="mt-3 flex items-center justify-between gap-3"><p className="line-clamp-1 text-[10px] text-slate-400">{item.permissions?.includes("*") ? "Full root access" : item.permissions?.join(", ") || "No permissions"}</p>{item.id !== "admin-root" && <div className="flex gap-2"><button disabled={!!busyId} onClick={() => { const password = window.prompt("Enter a new administrator password (minimum 8 characters):"); if (password) void act(`admin-password-${item.id}`, () => updateAdministrator(item.id, { password }), "Administrator password reset."); }} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-extrabold text-slate-600">Reset password</button><button disabled={!!busyId} onClick={() => act(item.id, () => updateAdministrator(item.id, { status: item.accountStatus === "active" ? "revoked" : "active" }), `Administrator ${item.accountStatus === "active" ? "revoked" : "restored"}.`)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-extrabold text-slate-600">{item.accountStatus === "active" ? "Revoke" : "Restore"}</button></div>}</div>
-                    {item.id !== "admin-root" && <div className="mt-3 flex flex-wrap gap-1.5">{ADMIN_PERMISSIONS.map((permission) => {
+                    <div className="mt-3 flex items-center justify-between gap-3"><p className="line-clamp-1 text-[10px] text-slate-400">{item.permissions?.includes("*") ? "Full root access" : item.permissions?.join(", ") || "No permissions"}</p>{!isRootAdmin(item) && <div className="flex gap-2"><button disabled={!!busyId} onClick={() => { const password = window.prompt("Enter a new administrator password (minimum 8 characters):"); if (password) void act(`admin-password-${item.id}`, () => updateAdministrator(item.id, { password }), "Administrator password reset."); }} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-extrabold text-slate-600">Reset password</button><button disabled={!!busyId} onClick={() => act(item.id, () => updateAdministrator(item.id, { status: item.accountStatus === "active" ? "revoked" : "active" }), `Administrator ${item.accountStatus === "active" ? "revoked" : "restored"}.`)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-extrabold text-slate-600">{item.accountStatus === "active" ? "Revoke" : "Restore"}</button></div>}</div>
+                    {!isRootAdmin(item) && <div className="mt-3 flex flex-wrap gap-1.5">{ADMIN_PERMISSIONS.map((permission) => {
                       const selected = item.permissions?.includes(permission.id) ?? false;
                       const currentPermissions = (item.permissions || []).filter((value): value is AdminPermission => value !== "*");
                       const next = selected ? currentPermissions.filter((value) => value !== permission.id) : [...currentPermissions, permission.id];
@@ -691,6 +696,7 @@ export default function AdminApp() {
         return;
       }
       try {
+        await bootstrapAdmin().catch(() => undefined);
         const currentProfile = await getAdminProfile();
         if (currentProfile.role !== "admin") {
           await logoutAdmin();
