@@ -75,7 +75,7 @@ app.use(
   "/*",
   cors({
     origin: "*",
-    allowHeaders: ["Content-Type", "Authorization", "apikey", "x-client-info"],
+    allowHeaders: ["Content-Type", "Authorization", "X-Admin-Token", "apikey", "x-client-info"],
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     exposeHeaders: ["Content-Length"],
     maxAge: 600,
@@ -127,6 +127,10 @@ async function body(c: Context) {
 function bearer(c: Context) {
   const header = c.req.header("Authorization") ?? "";
   return header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+}
+
+function adminBearer(c: Context) {
+  return (c.req.header("X-Admin-Token") ?? "").trim();
 }
 
 function normalizeProfile(value: Partial<Profile> & { id: string }): Profile {
@@ -234,7 +238,7 @@ async function requireUser(c: Context) {
 }
 
 async function requireAdmin(c: Context, permission?: Permission) {
-  const token = bearer(c);
+  const token = adminBearer(c);
   if (!token) throw new Error("Administrator authentication is required.");
   const session = await kv.get(`admin-session:${token}`) as AdminSession | undefined;
   if (!session || new Date(session.expiresAt).getTime() <= Date.now()) {
@@ -458,7 +462,7 @@ app.post(`${PREFIX}/signup`, async (c) => {
 
 app.get(`${PREFIX}/me`, async (c) => {
   try {
-    const token = bearer(c);
+    const token = adminBearer(c);
     const adminSession = token ? await kv.get(`admin-session:${token}`) as AdminSession | undefined : undefined;
     if (adminSession) {
       const admin = await requireAdmin(c);
@@ -663,7 +667,7 @@ app.post(`${PREFIX}/admin/login`, async (c) => {
 });
 
 app.post(`${PREFIX}/admin/logout`, async (c) => {
-  const token = bearer(c);
+  const token = adminBearer(c);
   if (token) await kv.del(`admin-session:${token}`);
   return c.json({ success: true });
 });
